@@ -144,7 +144,8 @@ export const notifications = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     recipientId: text("recipient_id").notNull().references(() => people.id),
     actorId: text("actor_id").notNull().references(() => people.id),
-    kind: text("kind").$type<"edit" | "override">().notNull(),
+    /** edit: lines you wrote changed · doc_edit: your document changed · override: a save contradicts your document */
+    kind: text("kind").$type<"edit" | "doc_edit" | "override">().notNull(),
     /** The document the recipient's information lives in. */
     docId: text("doc_id").notNull(),
     docTitle: text("doc_title").notNull(),

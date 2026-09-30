@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
 import { FileIcon } from "@/components/FileIcon";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, type LineMark } from "@/components/Markdown";
 import { RecentOverlap } from "@/components/RecentOverlap";
 import { WhoToContact } from "@/components/WhoToContact";
 import type { Contact, FormerContributor } from "@/lib/contacts";
@@ -14,8 +14,9 @@ import { StatusPill } from "@/components/StatusPill";
 import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
+import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
-import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
+import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type Doubt, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
 
 const LEVEL_NAMES = ["Don't rely on it", "Likely outdated", "Uncertain", "Probably reliable", "Reliable", "Authoritative"];
 
@@ -24,6 +25,7 @@ interface Detail {
   trust: TrustScore | null;
   history: { score: number; computedAt: string }[];
   signals: Signal[];
+  doubts: Doubt[];
   related: (Omit<Doc, "content"> & { trust: TrustScore | null })[];
   jevInput: unknown;
   governance: GovernanceSnapshot;
@@ -33,7 +35,7 @@ interface Detail {
 
 export default function DocPage() {
   const { id } = useParams<{ id: string }>();
-  const { viewerId, person, teamName, teams } = useApp();
+  const { viewerId, person, teamName, teams, people } = useApp();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [trust, setTrust] = useState<TrustScore | null>(null);
@@ -44,6 +46,11 @@ export default function DocPage() {
   const [draft, setDraft] = useState({ title: "", content: "" });
   const [showInput, setShowInput] = useState(false);
   const [justVerified, setJustVerified] = useState(false);
+  const [liveDoubts, setLiveDoubts] = useState<Doubt[] | null>(null);
+  const [doubtError, setDoubtError] = useState<string | null>(null);
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [showMarks, setShowMarks] = useState(true);
+  const [handedTo, setHandedTo] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const trustRef = useRef<TrustScore | null>(null);
   trustRef.current = trust;
@@ -83,6 +90,7 @@ export default function DocPage() {
     setTrust(null);
     setPrevious(null);
     setJustVerified(false);
+    setHandedTo(null);
     fetch(`/api/docs/${id}?viewer=${viewerId}`)
       .then(async (r) => {
         const d = await r.json();
@@ -91,9 +99,16 @@ export default function DocPage() {
       })
       .then((d) => {
         apply(d);
-        if (new URLSearchParams(window.location.search).get("edit")) {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("edit")) {
           setDraft({ title: d.doc.title, content: d.doc.content });
           setEditing(true);
+        }
+        // Arriving from a handover on the drive: show how the score moves.
+        if (params.get("from")) {
+          setPrevious(Number(params.get("from")));
+          setHandedTo(d.doc.ownerId);
+          window.history.replaceState(null, "", window.location.pathname);
         }
       })
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : "Could not load this document."));
@@ -122,6 +137,50 @@ export default function DocPage() {
     },
   });
 
+  const transfer = async (ownerId: string) => {
+    const res = await fetch(`/api/docs/${id}/owner`, { method: "POST", body: JSON.stringify({ viewerId, ownerId }) });
+    if (!res.ok) return;
+    setHandedTo(ownerId);
+    apply(await res.json());
+  };
+
+  // Contradictions with other documents take a few Jev calls, so they arrive after the page.
+  const docKey = detail && `${detail.doc.id}@${detail.doc.updatedAt}@${detail.doc.location}@${detail.doc.teamId}`;
+  useEffect(() => {
+    if (!docKey) return;
+    let cancelled = false;
+    setLiveDoubts(null);
+    setDoubtError(null);
+    fetch(`/api/docs/${id}/doubts`)
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error);
+        if (!cancelled) setLiveDoubts(json.doubts);
+      })
+      .catch((e) => !cancelled && setDoubtError((e as Error).message));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, docKey]);
+
+  const doubts = useMemo(() => [...(detail?.doubts ?? []), ...(liveDoubts ?? [])].sort((a, b) => a.lineNo - b.lineNo || (a.tone === "bad" ? -1 : 1)), [detail?.doubts, liveDoubts]);
+  const marks = useMemo(() => {
+    const out: Record<number, LineMark> = {};
+    for (const d of doubts) {
+      const m = out[d.lineNo];
+      out[d.lineNo] = { tone: m?.tone === "bad" || d.tone === "bad" ? "bad" : "warn", label: m ? `${m.label}\n${d.text}` : d.text };
+    }
+    return out;
+  }, [doubts]);
+
+  /** Highlight a doubtful line in both the document and the panel. */
+  const focusLine = (lineNo: number, from: "doc" | "panel") => {
+    setActiveLine(lineNo);
+    if (from === "doc") document.querySelector(`[data-doubt-line="${lineNo}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    else if (editing) selectLine(editorRef.current, lineNo);
+    else document.querySelector(`[data-line="${lineNo}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const related = useScores(detail?.related ?? null, viewerId);
 
   if (!detail) {
@@ -147,6 +206,7 @@ export default function DocPage() {
   const bad = signals.filter((s) => s.tone === "bad" || s.tone === "warn");
   const neutral = signals.filter((s) => s.tone === "neutral");
   const canEdit = doc.ownerId === viewerId || doc.collaboratorIds.includes(viewerId);
+  const handover = people.length ? handoverFor(doc, people, teams) : null;
 
   return (
     <div className="flex h-screen flex-col">
@@ -216,7 +276,7 @@ export default function DocPage() {
                   autoFocus
                 />
               ) : (
-                <Markdown text={doc.content} />
+                <Markdown text={doc.content} marks={showMarks ? marks : undefined} activeLine={activeLine} onMark={(n) => focusLine(n, "doc")} />
               )}
             </div>
           </div>
@@ -286,6 +346,32 @@ export default function DocPage() {
           <WhoToContact contacts={detail.people.contacts} former={detail.people.former} />
 
           <section className="border-b border-slate-100 p-5">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-slate-800">
+                Doubts in the text{doubts.length > 0 && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 text-xs text-slate-600">{doubts.length}</span>}
+              </h3>
+              {doubts.length > 0 && !editing && (
+                <button onClick={() => setShowMarks(!showMarks)} className="text-xs text-blue-700 hover:underline">
+                  {showMarks ? "Hide" : "Show"} highlights
+                </button>
+              )}
+            </div>
+            {!liveDoubts && !doubtError && (
+              <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-[#0b57d0]" />
+                Jev is checking each line against other documents…
+              </div>
+            )}
+            {doubtError && <div className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">Couldn&apos;t check for contradictions: {doubtError}</div>}
+            {liveDoubts && doubts.length === 0 && <p className="text-sm text-slate-600">No line looks outdated or contradicts another document.</p>}
+            <ul className="space-y-2">
+              {doubts.map((d) => (
+                <DoubtRow key={d.key} d={d} active={d.lineNo === activeLine} onFocus={() => focusLine(d.lineNo, "panel")} />
+              ))}
+            </ul>
+          </section>
+
+          <section className="border-b border-slate-100 p-5">
             <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
             <PersonRow label="Owner" id={doc.ownerId} />
             {doc.collaboratorIds.map((c) => <PersonRow key={c} label="Collaborator" id={c} />)}
@@ -296,6 +382,47 @@ export default function DocPage() {
               </div>
             )}
             {!owner && <div className="mt-2 text-xs text-[#c5221f]">This document has no owner.</div>}
+            {handedTo && !handover && (
+              <div className="mt-3 rounded-xl bg-[#e6f4ea] p-3 text-xs text-[#0d652d]">
+                Handed over to <span className="font-medium">{handedTo === viewerId ? "you" : person(handedTo)?.name}</span>. Jev rescored the document with its new owner.
+              </div>
+            )}
+            {handover && (
+              <div className="mt-3 rounded-xl bg-[#fef7e0] p-3">
+                <div className="text-sm font-medium text-slate-900">Handover needed</div>
+                <ul className="mt-1 space-y-0.5 text-xs text-slate-700">
+                  {handover.reasons.map((r, i) => <li key={i}>• {r.text}</li>)}
+                </ul>
+                {handover.formerOwnerId && (
+                  <p className="mt-2 text-xs text-slate-600">
+                    {person(handover.formerOwnerId)?.name} is still at the company – ask them what changed before taking over.
+                  </p>
+                )}
+                {handover.successors.length > 0 && <div className="mb-1 mt-3 text-[11px] font-medium uppercase tracking-wide text-slate-500">Suggested new owner</div>}
+                <ul className="space-y-1.5">
+                  {handover.successors.map((s) => {
+                    const p = person(s.personId);
+                    return (
+                      <li key={s.personId} className="flex items-center gap-2">
+                        <Avatar person={p} size={24} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm text-slate-800">{s.personId === viewerId ? "You" : p?.name}</div>
+                          <div className="truncate text-[11px] text-slate-500">{s.why.join(" · ")}</div>
+                        </div>
+                        <button onClick={() => transfer(s.personId)} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50">
+                          {s.personId === viewerId ? "Take over" : "Assign"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {doc.ownerId !== viewerId && !handover.successors.some((s) => s.personId === viewerId) && (
+                  <button onClick={() => transfer(viewerId)} className="mt-3 text-xs font-medium text-blue-700 hover:underline">
+                    Take ownership myself
+                  </button>
+                )}
+              </div>
+            )}
           </section>
 
           <section className="border-b border-slate-100 p-5">
@@ -413,6 +540,36 @@ export default function DocPage() {
       </div>
     );
   }
+}
+
+function DoubtRow({ d, active, onFocus }: { d: Doubt; active: boolean; onFocus: () => void }) {
+  const color = d.tone === "bad" ? "#c5221f" : "#b06000";
+  return (
+    <li data-doubt-line={d.lineNo}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onFocus}
+        onKeyDown={(e) => e.key === "Enter" && onFocus()}
+        className={`cursor-pointer rounded-xl border-l-4 p-2.5 text-xs text-slate-700 ${active ? "bg-slate-100" : "bg-slate-50 hover:bg-slate-100"}`}
+        style={{ borderColor: color }}
+      >
+        <div className="mb-1 flex items-center gap-2 text-[11px] text-slate-500">
+          <span className="font-medium" style={{ color }}>Line {d.lineNo}</span>
+          <span className="truncate italic">“{d.lineText}”</span>
+        </div>
+        <div className="text-slate-800">{d.text}</div>
+        {d.source && (
+          <div className="mt-1.5 border-t border-slate-200 pt-1.5 text-slate-600">
+            <Link href={`/doc/${d.source.docId}`} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">{d.source.title}</Link>, line {d.source.lineNo}: “{d.source.lineText}”
+            <div className="mt-0.5 text-[11px] text-slate-500">
+              {d.source.status} · {d.source.location} · edited {timeAgo(d.source.updatedAt)}
+            </div>
+          </div>
+        )}
+      </div>
+    </li>
+  );
 }
 
 function SignalRow({ s }: { s: Signal }) {

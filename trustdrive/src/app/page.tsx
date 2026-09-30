@@ -2,24 +2,26 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { FileIcon } from "@/components/FileIcon";
+import { exposure, HandoverRadar } from "@/components/HandoverRadar";
 import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
 import { StatusPill } from "@/components/StatusPill";
 import { UploadDialog } from "@/components/UploadDialog";
+import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
 import { LOCATIONS, type Doc, type Location, type TrustScore } from "@/lib/types";
 
 type DocRow = Omit<Doc, "content"> & { excerpt: string; trust: TrustScore | null };
 
-type View = { kind: "all" } | { kind: "mine" } | { kind: "shared" } | { kind: "attention" } | { kind: "team"; id: string } | { kind: "location"; id: Location };
+type View = { kind: "all" } | { kind: "mine" } | { kind: "shared" } | { kind: "attention" } | { kind: "radar" } | { kind: "team"; id: string } | { kind: "location"; id: Location };
 
 export default function Home() {
   const router = useRouter();
-  const { viewerId, teams, search, person, teamName } = useApp();
+  const { viewerId, teams, people, search, person, teamName } = useApp();
   const [docs, setDocs] = useState<DocRow[] | null>(null);
   const [view, setView] = useState<View>({ kind: "all" });
   const [sort, setSort] = useState<"modified" | "trust">("modified");
@@ -34,9 +36,28 @@ export default function Home() {
       .then((j) => setDocs(j.docs));
   }, [viewerId]);
 
+  const handovers = useMemo(() => {
+    if (!docs || !people.length) return [];
+    return docs.flatMap((doc) => {
+      const handover = handoverFor(doc, people, teams);
+      return handover ? [{ doc, handover }] : [];
+    });
+  }, [docs, people, teams]);
+
+  const matches = useCallback(
+    (d: DocRow) => {
+      const q = search.toLowerCase().trim();
+      return !q || d.title.toLowerCase().includes(q) || d.excerpt.toLowerCase().includes(q) || d.tags.some((t) => t.includes(q));
+    },
+    [search],
+  );
+  const radarRows = useMemo(
+    () => handovers.filter((h) => matches(h.doc)).sort((a, b) => exposure(b.doc, trustOf(b.doc)) - exposure(a.doc, trustOf(a.doc))),
+    [handovers, matches, trustOf],
+  );
+
   const shown = useMemo(() => {
     if (!docs) return [];
-    const q = search.toLowerCase().trim();
     return docs
       .filter((d) => {
         if (view.kind === "mine") return d.ownerId === viewerId;
@@ -49,12 +70,12 @@ export default function Home() {
         if (view.kind === "location") return d.location === view.id;
         return true;
       })
-      .filter((d) => !q || d.title.toLowerCase().includes(q) || d.excerpt.toLowerCase().includes(q) || d.tags.some((t) => t.includes(q)))
+      .filter(matches)
       .sort((a, b) => (sort === "trust" ? (trustOf(b)?.score ?? -1) - (trustOf(a)?.score ?? -1) : b.updatedAt.localeCompare(a.updatedAt)));
-  }, [docs, view, search, sort, viewerId, trustOf]);
+  }, [docs, view, matches, sort, viewerId, trustOf]);
 
   const heading =
-    view.kind === "all" ? "My Drive" : view.kind === "mine" ? "Owned by me" : view.kind === "shared" ? "Shared with me" : view.kind === "attention" ? "Needs attention" : view.kind === "team" ? teamName(view.id) : view.id;
+    view.kind === "all" ? "My Drive" : view.kind === "mine" ? "Owned by me" : view.kind === "shared" ? "Shared with me" : view.kind === "attention" ? "Needs attention" : view.kind === "radar" ? "Handover radar" : view.kind === "team" ? teamName(view.id) : view.id;
 
   const createDoc = async () => {
     const res = await fetch("/api/docs", { method: "POST", body: JSON.stringify({ viewerId, title: "Untitled document", content: "# Untitled document\n\n" }) });
@@ -62,7 +83,7 @@ export default function Home() {
     router.push(`/doc/${id}?edit=1`);
   };
 
-  const navItem = (v: View, label: string, icon: React.ReactNode) => {
+  const navItem = (v: View, label: string, icon: React.ReactNode, count?: number) => {
     const active = JSON.stringify(v) === JSON.stringify(view);
     return (
       <button
@@ -72,6 +93,7 @@ export default function Home() {
       >
         <span className="w-5 text-center">{icon}</span>
         <span className="truncate">{label}</span>
+        {!!count && <span className="ml-auto rounded-full bg-[#fce8e6] px-2 text-xs font-medium text-[#c5221f]">{count}</span>}
       </button>
     );
   };
@@ -113,6 +135,7 @@ export default function Home() {
             {navItem({ kind: "mine" }, "Owned by me", "👤")}
             {navItem({ kind: "shared" }, "Shared with me", "👥")}
             {navItem({ kind: "attention" }, "Needs attention", "⚠️")}
+            {navItem({ kind: "radar" }, "Handover radar", "📡", handovers.length)}
           </nav>
           <div className="mb-1 mt-5 px-4 text-xs font-medium uppercase tracking-wide text-slate-500">Teams</div>
           <nav className="space-y-0.5">{teams.map((t) => navItem({ kind: "team", id: t.id }, t.name, "▪"))}</nav>
@@ -136,7 +159,7 @@ export default function Home() {
         <main className="mb-4 mr-4 flex min-w-0 flex-1 flex-col rounded-2xl bg-white">
           <div className="flex items-center justify-between px-6 pb-2 pt-5">
             <h1 className="text-2xl text-slate-800">{heading}</h1>
-            <div className="flex items-center gap-1 rounded-full border border-slate-300 p-0.5 text-sm">
+            <div className={`flex items-center gap-1 rounded-full border border-slate-300 p-0.5 text-sm ${view.kind === "radar" ? "invisible" : ""}`}>
               {(["modified", "trust"] as const).map((s) => (
                 <button key={s} onClick={() => setSort(s)} className={`rounded-full px-3 py-1 ${sort === s ? "bg-[#c2e7ff]" : "hover:bg-slate-100"}`}>
                   {s === "modified" ? "Last modified" : "Trust score"}
@@ -146,6 +169,9 @@ export default function Home() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
+            {view.kind === "radar" && docs ? (
+              <HandoverRadar rows={radarRows} trustOf={trustOf} failed={failed} />
+            ) : (
             <table className="w-full table-fixed text-sm">
               <thead className="sticky top-0 z-10 bg-white text-left text-slate-600">
                 <tr className="border-b border-slate-200">
@@ -205,6 +231,7 @@ export default function Home() {
                 })}
               </tbody>
             </table>
+            )}
           </div>
         </main>
       </div>

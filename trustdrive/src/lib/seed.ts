@@ -10,6 +10,7 @@ export function buildSeed(now = Date.now()): Db {
     { id: "pay-be", name: "Payroll Belgium" },
     { id: "pay-nl", name: "Payroll Netherlands" },
     { id: "pay-fr", name: "Payroll France" },
+    { id: "pay-de", name: "Payroll Germany" },
     { id: "hr-ops", name: "HR Operations" },
     { id: "legal", name: "Legal & Compliance" },
     { id: "time", name: "Time & Attendance" },
@@ -30,6 +31,17 @@ export function buildSeed(now = Date.now()): Db {
     { id: "julia", name: "Julia Schmidt", role: "Compliance Officer", teamId: "legal", location: "Germany", active: false, joinedAt: ago(2200), leftAt: ago(380), color: "#00897b" },
     { id: "wout", name: "Wout Jacobs", role: "Time & Attendance Engineer", teamId: "time", location: "Belgium", active: true, joinedAt: ago(1100), color: "#f9ab00" },
     { id: "nina", name: "Nina Vermeulen", role: "Customer Success Manager", teamId: "cs", location: "Belgium", active: true, joinedAt: ago(600), color: "#e52592" },
+    { id: "sofie", name: "Sofie Willems", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(1300), color: "#7cb342" },
+    { id: "karim", name: "Karim El Amrani", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(480), color: "#6d4c41" },
+    { id: "lars", name: "Lars de Jong", role: "Senior Payroll Specialist", teamId: "pay-nl", location: "Netherlands", active: true, joinedAt: ago(2100), color: "#0277bd" },
+    { id: "emma", name: "Emma Visser", role: "Junior Payroll Specialist", teamId: "pay-nl", location: "Netherlands", active: true, joinedAt: ago(60), color: "#ad1457" },
+    { id: "lea", name: "Léa Martin", role: "Responsable Paie", teamId: "pay-fr", location: "France", active: true, joinedAt: ago(1600), color: "#00838f" },
+    { id: "hugo", name: "Hugo Bernard", role: "Gestionnaire Paie", teamId: "pay-fr", location: "France", active: false, joinedAt: ago(2000), leftAt: ago(410), color: "#8d6e63" },
+    { id: "felix", name: "Felix Wagner", role: "Payroll Team Lead Germany", teamId: "pay-de", location: "Germany", active: true, joinedAt: ago(900), color: "#283593" },
+    { id: "lena", name: "Lena Fischer", role: "Payroll Specialist", teamId: "pay-de", location: "Germany", active: true, joinedAt: ago(350), color: "#c0ca33" },
+    { id: "bram", name: "Bram Goossens", role: "Time & Attendance Engineer", teamId: "time", location: "Belgium", active: true, joinedAt: ago(1400), previousTeamId: "cs", movedTeamAt: ago(200), color: "#546e7a" },
+    { id: "inge", name: "Inge Smets", role: "HR Operations Specialist", teamId: "hr-ops", location: "Belgium", active: true, joinedAt: ago(800), color: "#d84315" },
+    { id: "ruben", name: "Ruben Dierckx", role: "Customer Success Lead", teamId: "cs", location: "Belgium", active: false, joinedAt: ago(1900), leftAt: ago(160), color: "#5e35b1" },
   ];
 
   const views = (ids: string[], spreadDays: number) =>
@@ -515,6 +527,516 @@ Gross monthly salaries as of 1 January 2026 (after the 2.0% indexation).
 | October | 20 Oct | 24 Oct | 30 Oct |
 | November | 19 Nov | 24 Nov | 28 Nov |
 | December | 10 Dec | 15 Dec | 22 Dec |`,
+    },
+
+    // ── Additional demo documents ──────────────────────────────────────────
+    {
+      id: "indexation-pc200-2027",
+      title: "Loonindexering PC 200 – januari 2027",
+      kind: "doc",
+      ownerId: "sofie",
+      collaboratorIds: ["lotte"],
+      readerIds: ["jonas", "karim", "an"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["indexation", "salary", "payroll-processing"],
+      createdAt: ago(35),
+      updatedAt: ago(4),
+      lastEditedById: "sofie",
+      verifications: [{ personId: "an", at: ago(3) }],
+      views: views(["jonas", "karim", "an", "lotte", "jonas"], 10),
+      content: `# Loonindexering PC 200 – januari 2027
+
+Voor bedienden in paritair comité 200 worden de lonen op 1 januari 2027 geïndexeerd.
+
+- Indexeringspercentage: 2,0% op 1 januari 2027
+- Van toepassing op: brutomaandlonen en de sectorale minimumlonen
+- Niet van toepassing op: bedrijfswagen, maaltijdcheques (aparte regeling)
+
+## Uitvoering in mysdworx Pay
+1. De indexering wordt automatisch toegepast in de loonrun van januari.
+2. Controleer klanten met een afwijkende loonpolitiek (vaste lonen boven barema).
+3. Communiceer het nieuwe loon uiterlijk op 10 januari 2027 aan de klant.`,
+    },
+    {
+      id: "yearend-bonus-parttime",
+      title: "Eindejaarspremie – berekening voor deeltijdse werknemers",
+      kind: "doc",
+      ownerId: "karim",
+      collaboratorIds: ["sofie"],
+      readerIds: ["jonas", "lotte"],
+      location: "Belgium",
+      status: "To be reviewed",
+      teamId: "pay-be",
+      tags: ["year-end", "bonus", "payroll-processing"],
+      createdAt: ago(18),
+      updatedAt: ago(2),
+      lastEditedById: "karim",
+      verifications: [],
+      views: views(["jonas", "lotte", "sofie"], 7),
+      content: `# Eindejaarspremie – deeltijdse werknemers
+
+De eindejaarspremie (13de maand) wordt pro rata berekend op basis van de gewerkte dagen.
+
+- Referteperiode: 1 januari tot 31 december 2026
+- Deeltijdse werknemer 4/5: premie = 80% van het brutomaandloon van december
+- Gelijkgestelde dagen (ziekte tot 30 dagen, klein verlet) tellen mee
+- Uitbetaling: met de loonrun van december, uiterlijk 15 december 2026
+
+Opmerking: controle nodig voor werknemers die in de loop van het jaar van regime wisselden.`,
+    },
+    {
+      id: "payroll-calendar-2027-be",
+      title: "Payroll calendar 2027 – Belgium",
+      kind: "sheet",
+      ownerId: "karim",
+      collaboratorIds: [],
+      readerIds: ["nina", "jonas"],
+      location: "Belgium",
+      status: "WIP",
+      teamId: "pay-be",
+      tags: ["deadlines", "payroll-processing"],
+      createdAt: ago(6),
+      updatedAt: ago(1),
+      lastEditedById: "karim",
+      verifications: [],
+      views: views(["nina"], 1),
+      content: `# Payroll calendar 2027 – Belgium
+
+| Month | Input deadline | Payroll run | Payment |
+|---|---|---|---|
+| January | 20 Jan | 25 Jan | 29 Jan |
+| February | 17 Feb | 22 Feb | 26 Feb |
+| March | 18 Mar | 23 Mar | 30 Mar |
+
+Remaining months to be added once the bank holidays are confirmed.`,
+    },
+    {
+      id: "vakantiegeld-nl-2026",
+      title: "Vakantiegeld Nederland 2026",
+      kind: "doc",
+      ownerId: "lars",
+      collaboratorIds: ["emma"],
+      readerIds: ["sanne"],
+      location: "Netherlands",
+      status: "Completed",
+      teamId: "pay-nl",
+      tags: ["holiday-pay", "payroll-processing"],
+      createdAt: ago(160),
+      updatedAt: ago(26),
+      lastEditedById: "emma",
+      verifications: [{ personId: "lars", at: ago(24) }],
+      views: views(["sanne", "emma", "lars"], 25),
+      content: `# Vakantiegeld Nederland 2026
+
+- Wettelijk vakantiegeld: 8% van het brutoloon over de opbouwperiode
+- Opbouwperiode: 1 juni 2025 tot en met 31 mei 2026
+- Uitbetaling: uiterlijk in de loonrun van juni 2026
+- Bij uitdienst: opgebouwd vakantiegeld wordt uitbetaald met de eindafrekening
+
+Afwijkingen in de CAO gaan voor. Controleer de klantconfiguratie in mysdworx Pay.`,
+    },
+    {
+      id: "company-car-nl",
+      title: "Bijtelling auto van de zaak – Nederland 2026",
+      kind: "doc",
+      ownerId: "lars",
+      collaboratorIds: [],
+      readerIds: ["sanne", "emma"],
+      location: "Netherlands",
+      status: "Completed",
+      teamId: "pay-nl",
+      tags: ["benefits", "tax", "compensation"],
+      createdAt: ago(240),
+      updatedAt: ago(70),
+      lastEditedById: "lars",
+      verifications: [{ personId: "lars", at: ago(70) }],
+      views: views(["emma", "sanne"], 30),
+      content: `# Bijtelling auto van de zaak – 2026
+
+- Standaard bijtelling: 22% van de cataloguswaarde
+- Elektrische auto (2026): 17% tot een cataloguswaarde van € 30.000, daarboven 22%
+- Rittenregistratie: geen bijtelling bij minder dan 500 km privé per jaar
+- De bijtelling wordt maandelijks verwerkt in de loonadministratie`,
+    },
+    {
+      id: "cloture-paie-fr",
+      title: "Procédure de clôture de paie mensuelle – France",
+      kind: "doc",
+      ownerId: "lea",
+      collaboratorIds: ["camille", "hugo"],
+      readerIds: ["eva"],
+      location: "France",
+      status: "Completed",
+      teamId: "pay-fr",
+      tags: ["procedure", "payroll-processing", "declarations"],
+      createdAt: ago(700),
+      updatedAt: ago(50),
+      lastEditedById: "camille",
+      verifications: [{ personId: "lea", at: ago(48) }],
+      views: views(["camille", "eva", "lea"], 30),
+      content: `# Clôture de paie mensuelle – France
+
+## Calendrier
+- J-10 : réception des variables de paie du client
+- J-5 : calcul de la paie et contrôles de cohérence
+- J-3 : validation par le client
+- 5 ou 15 du mois suivant : dépôt de la DSN selon l'effectif
+
+## Contrôles
+1. Comparer la masse salariale avec le mois précédent (écart > 5 % à justifier).
+2. Vérifier les absences et les indemnités journalières de sécurité sociale.
+3. Contrôler les cotisations de la mutuelle obligatoire.`,
+    },
+    {
+      id: "dsn-calendar-fr-2026",
+      title: "Calendrier DSN 2026",
+      kind: "sheet",
+      ownerId: "camille",
+      collaboratorIds: [],
+      readerIds: ["lea"],
+      location: "France",
+      status: "Completed",
+      teamId: "pay-fr",
+      tags: ["declarations", "deadlines"],
+      createdAt: ago(280),
+      updatedAt: ago(90),
+      lastEditedById: "camille",
+      verifications: [{ personId: "lea", at: ago(85) }],
+      views: views(["lea", "camille"], 30),
+      content: `# Calendrier DSN 2026
+
+| Effectif | Date limite de dépôt |
+|---|---|
+| 50 salariés et plus | 5 du mois suivant |
+| Moins de 50 salariés | 15 du mois suivant |
+
+La DSN de décembre 2026 doit être déposée au plus tard le 5 janvier 2027 (entreprises de 50 salariés et plus).`,
+    },
+    {
+      id: "teletravail-fr",
+      title: "Indemnité de télétravail – France",
+      kind: "doc",
+      ownerId: "hugo",
+      collaboratorIds: [],
+      readerIds: ["camille", "lea"],
+      location: "France",
+      status: "Completed",
+      teamId: "pay-fr",
+      tags: ["allowance", "policy", "compensation"],
+      createdAt: ago(900),
+      updatedAt: ago(560),
+      lastEditedById: "hugo",
+      verifications: [{ personId: "hugo", at: ago(560) }],
+      views: views(["camille"], 60),
+      content: `# Indemnité de télétravail – France
+
+- Montant : 2,70 € par jour de télétravail, exonéré dans la limite de 59,40 € par mois
+- Versement mensuel avec le salaire
+- Les jours de télétravail sont déclarés par le salarié dans mysdworx Time`,
+    },
+    {
+      id: "lohnabrechnung-checkliste-de",
+      title: "Checkliste monatliche Lohnabrechnung – Deutschland",
+      kind: "doc",
+      ownerId: "felix",
+      collaboratorIds: ["lena"],
+      readerIds: ["eva"],
+      location: "Germany",
+      status: "Completed",
+      teamId: "pay-de",
+      tags: ["procedure", "payroll-processing", "checklist"],
+      createdAt: ago(300),
+      updatedAt: ago(15),
+      lastEditedById: "lena",
+      verifications: [{ personId: "felix", at: ago(14) }],
+      views: views(["lena", "felix", "eva", "lena"], 20),
+      content: `# Checkliste monatliche Lohnabrechnung – Deutschland
+
+1. Bewegungsdaten (Eintritte, Austritte, Fehlzeiten) bis zum 15. des Monats erfassen.
+2. Sozialversicherungsbeiträge berechnen und Beitragsnachweis spätestens am drittletzten Bankarbeitstag übermitteln.
+3. Lohnsteuer-Anmeldung bis zum 10. des Folgemonats an das Finanzamt senden.
+4. Minijobber: Verdienstgrenze prüfen (556 € pro Monat in 2026).
+5. Entgeltabrechnungen an die Mitarbeiter bereitstellen.`,
+    },
+    {
+      id: "entgeltfortzahlung-de",
+      title: "Entgeltfortzahlung im Krankheitsfall – Deutschland",
+      kind: "doc",
+      ownerId: "lena",
+      collaboratorIds: [],
+      readerIds: ["felix"],
+      location: "Germany",
+      status: "To be reviewed",
+      teamId: "pay-de",
+      tags: ["absence", "leave", "policy"],
+      createdAt: ago(40),
+      updatedAt: ago(40),
+      lastEditedById: "lena",
+      verifications: [],
+      views: views(["felix"], 10),
+      content: `# Entgeltfortzahlung im Krankheitsfall
+
+- Der Arbeitgeber zahlt bis zu 6 Wochen 100 % des Entgelts.
+- Danach zahlt die Krankenkasse Krankengeld (70 % des Bruttoentgelts, max. 90 % des Nettoentgelts).
+- Arbeitsunfähigkeitsbescheinigung: elektronisch (eAU) ab dem 4. Kalendertag abrufen.`,
+    },
+    {
+      id: "onboarding-consultant-be",
+      title: "Onboarding nieuwe payroll consultant",
+      kind: "doc",
+      ownerId: "an",
+      collaboratorIds: ["sofie", "lotte"],
+      readerIds: ["jonas", "karim"],
+      location: "Belgium",
+      status: "WIP",
+      teamId: "pay-be",
+      tags: ["onboarding", "knowledge-sharing", "handover"],
+      createdAt: ago(100),
+      updatedAt: ago(9),
+      lastEditedById: "sofie",
+      verifications: [],
+      views: views(["jonas", "karim", "jonas", "karim"], 15),
+      content: `# Onboarding nieuwe payroll consultant
+
+## Week 1
+- Toegang tot mysdworx Pay en Time aanvragen via HR Operations
+- Meelopen met een senior consultant tijdens 2 loonruns
+- Lezen: DmfA-checklist, eindejaarsprocedure, overuren-beleid
+
+## Week 2–4
+- Eerste eigen klantportefeuille (max. 5 klanten) onder begeleiding
+- Wekelijkse check-in met de teamlead
+
+TODO: sectie over Belcotax en fiscale fiches toevoegen.`,
+    },
+    {
+      id: "absence-codes",
+      title: "Absence codes reference",
+      kind: "sheet",
+      ownerId: "wout",
+      collaboratorIds: ["bram", "an"],
+      readerIds: ["jonas", "lotte", "sofie", "karim", "nina"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "time",
+      tags: ["absence", "clocking", "time"],
+      createdAt: ago(500),
+      updatedAt: ago(33),
+      lastEditedById: "bram",
+      verifications: [{ personId: "wout", at: ago(30) }],
+      views: views(["jonas", "lotte", "sofie", "karim", "nina", "jonas"], 25),
+      content: `# Absence codes reference (mysdworx Time)
+
+| Code | Meaning | Paid by |
+|---|---|---|
+| S1 | Sick leave | Employer (guaranteed salary) |
+| S2 | Relapse within 14 days | Employer |
+| V1 | Annual leave | Employer |
+| KV | Short leave (klein verlet) | Employer |
+| TW | Temporary unemployment | National Employment Office |`,
+    },
+    {
+      id: "terminal-models",
+      title: "Clocking terminal models & firmware",
+      kind: "sheet",
+      ownerId: "bram",
+      collaboratorIds: ["wout"],
+      readerIds: ["nina"],
+      location: "Global",
+      status: "Completed",
+      teamId: "time",
+      tags: ["clocking", "time", "support"],
+      createdAt: ago(150),
+      updatedAt: ago(20),
+      lastEditedById: "bram",
+      verifications: [{ personId: "wout", at: ago(18) }],
+      views: views(["nina", "wout"], 20),
+      content: `# Clocking terminal models & firmware
+
+| Model | Supported firmware | End of support |
+|---|---|---|
+| TT-400 | 4.2.1 | December 2027 |
+| TT-300 | 3.9.8 | June 2026 (ended) |
+| Bio-500 | 5.0.3 | Not announced |
+
+TT-300 terminals must be replaced; customers were informed in March 2026.`,
+    },
+    {
+      id: "clocking-setup-2019",
+      title: "Clocking terminal installation guide",
+      kind: "pdf",
+      ownerId: "ruben",
+      collaboratorIds: ["daan"],
+      readerIds: ["nina"],
+      location: "Global",
+      status: "Completed",
+      teamId: "cs",
+      tags: ["clocking", "time", "procedure"],
+      createdAt: ago(2400),
+      updatedAt: ago(1500),
+      lastEditedById: "ruben",
+      verifications: [{ personId: "ruben", at: ago(1500) }],
+      views: views(["nina"], 90),
+      supersededById: "terminal-models",
+      content: `# Clocking terminal installation guide (2019)
+
+1. Mount the TT-300 terminal at 1.2 m height near the entrance.
+2. Connect it to the network with a fixed IP address.
+3. Install firmware 3.2 from the USB stick delivered with the terminal.
+4. Register the terminal in the old Time portal (Legacy Time 5).`,
+    },
+    {
+      id: "escalation-playbook",
+      title: "Client escalation playbook",
+      kind: "doc",
+      ownerId: "nina",
+      collaboratorIds: ["ruben"],
+      readerIds: ["an", "lotte", "sanne", "camille"],
+      location: "Global",
+      status: "Completed",
+      teamId: "cs",
+      tags: ["client", "support", "procedure"],
+      createdAt: ago(420),
+      updatedAt: ago(55),
+      lastEditedById: "nina",
+      verifications: [{ personId: "nina", at: ago(55) }],
+      views: views(["an", "lotte", "sanne", "camille", "an"], 30),
+      content: `# Client escalation playbook
+
+## Severity levels
+- P1 – payroll cannot be paid on time: respond within 1 hour, team lead involved immediately
+- P2 – incorrect payslips for more than 10 employees: respond within 4 hours
+- P3 – individual question or cosmetic issue: respond within 2 working days
+
+## Steps
+1. Log the escalation in the CRM with the client ID and severity.
+2. Inform the account's payroll consultant and their team lead.
+3. Send the client an update at least every 4 hours for P1 cases.`,
+    },
+    {
+      id: "sar-procedure",
+      title: "GDPR subject access request procedure",
+      kind: "doc",
+      ownerId: "tom",
+      collaboratorIds: ["inge"],
+      readerIds: ["eva", "an", "nina"],
+      location: "Global",
+      status: "Completed",
+      teamId: "legal",
+      tags: ["gdpr", "master-data", "procedure"],
+      createdAt: ago(380),
+      updatedAt: ago(28),
+      lastEditedById: "inge",
+      verifications: [{ personId: "tom", at: ago(27) }],
+      views: views(["eva", "an", "nina"], 30),
+      content: `# Subject access requests (GDPR art. 15)
+
+- Respond within 1 month of receiving the request (extendable by 2 months for complex requests).
+- Verify the identity of the requester before sharing any data.
+- Export employee master data from mysdworx HR via Reports > Personal data export.
+- Log every request in the privacy register, including the response date.`,
+    },
+    {
+      id: "expense-faq",
+      title: "Expense claims – FAQ",
+      kind: "doc",
+      ownerId: "inge",
+      collaboratorIds: [],
+      readerIds: ["jonas", "karim", "emma", "lena"],
+      location: "Global",
+      status: "Completed",
+      teamId: "hr-ops",
+      tags: ["expenses", "travel", "faq"],
+      createdAt: ago(200),
+      updatedAt: ago(45),
+      lastEditedById: "inge",
+      verifications: [],
+      views: views(["jonas", "karim", "emma", "lena", "jonas"], 30),
+      content: `# Expense claims – FAQ
+
+**Q: How do I submit an expense?**
+A: Via mysdworx Travel & Expense, with a photo of the receipt, within 30 days.
+
+**Q: What is the mileage allowance in Belgium?**
+A: €0.4326 per km in 2026.
+
+**Q: What is the hotel limit?**
+A: €150 per night in Europe, €220 in capital cities.`,
+    },
+    {
+      id: "team-contacts-be",
+      title: "Payroll Belgium – team contacts & backups",
+      kind: "sheet",
+      ownerId: "an",
+      collaboratorIds: [],
+      readerIds: ["jonas", "karim", "sofie", "lotte", "nina"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["knowledge-sharing", "client"],
+      createdAt: ago(600),
+      updatedAt: ago(130),
+      lastEditedById: "an",
+      verifications: [{ personId: "an", at: ago(130) }],
+      views: views(["jonas", "karim", "nina", "jonas"], 20),
+      content: `# Payroll Belgium – team contacts & backups
+
+| Consultant | Portfolio | Backup |
+|---|---|---|
+| Lotte Peeters | Retail & logistics (22 clients) | Sofie Willems |
+| Sofie Willems | Healthcare (18 clients) | Lotte Peeters |
+| Pieter Wouters | Construction (15 clients) | Jonas Maes |
+| Jonas Maes | SMEs (9 clients) | Karim El Amrani |
+
+Team lead: An Claes – escalations and holiday cover.`,
+    },
+    {
+      id: "minijob-de-2026",
+      title: "Minijobs 2026 – Überblick",
+      kind: "doc",
+      ownerId: "lena",
+      collaboratorIds: ["felix"],
+      readerIds: [],
+      location: "Germany",
+      status: "Completed",
+      teamId: "pay-de",
+      tags: ["salary", "declarations", "policy"],
+      createdAt: ago(250),
+      updatedAt: ago(250),
+      lastEditedById: "lena",
+      verifications: [],
+      views: views(["felix"], 60),
+      content: `# Minijobs 2026 – Überblick
+
+- Verdienstgrenze: 538 € pro Monat
+- Pauschalabgaben des Arbeitgebers: ca. 30 % (Renten-, Krankenversicherung, Pauschalsteuer)
+- Anmeldung bei der Minijob-Zentrale vor Beschäftigungsbeginn`,
+    },
+    {
+      id: "mutuelle-faq-fr",
+      title: "Mutuelle d'entreprise – FAQ salariés",
+      kind: "doc",
+      ownerId: "lea",
+      collaboratorIds: [],
+      readerIds: ["camille", "eva"],
+      location: "France",
+      status: "Completed",
+      teamId: "pay-fr",
+      tags: ["benefits", "faq"],
+      createdAt: ago(120),
+      updatedAt: ago(60),
+      lastEditedById: "lea",
+      verifications: [{ personId: "lea", at: ago(60) }],
+      views: views(["camille", "eva"], 30),
+      content: `# Mutuelle d'entreprise – questions fréquentes
+
+**Qui doit adhérer ?** Tous les salariés, sauf cas de dispense documentée.
+
+**Qui paie ?** L'employeur prend en charge au moins 50 % de la cotisation.
+
+**Comment est-elle déclarée ?** Les cotisations figurent chaque mois dans la DSN.`,
     },
   ];
 

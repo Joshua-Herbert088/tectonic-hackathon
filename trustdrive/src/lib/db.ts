@@ -100,11 +100,26 @@ function insertSeed(db: Orm) {
   });
 }
 
-/** Adds demo documents introduced after this database was first seeded, without touching existing data. */
+/**
+ * Adds demo teams, people and documents introduced after this database was first seeded, without
+ * touching existing data.
+ */
 function insertMissingSeedDocs(db: Orm) {
+  const seed = buildSeed();
+  const teamIds = new Set(db.select({ id: schema.teams.id }).from(schema.teams).all().map((t) => t.id));
+  const newTeams = seed.teams.filter((t) => !teamIds.has(t.id));
+  const personIds = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
+  const newPeople = seed.people.filter((p) => !personIds.has(p.id));
+  if (newTeams.length || newPeople.length) {
+    db.transaction((tx) => {
+      if (newTeams.length) tx.insert(schema.teams).values(newTeams).run();
+      if (newPeople.length) tx.insert(schema.people).values(newPeople).run();
+    });
+  }
+
   const existing = new Set(db.select({ id: schema.documents.id }).from(schema.documents).all().map((d) => d.id));
   const people = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
-  const missing = buildSeed().docs.filter(
+  const missing = seed.docs.filter(
     (d) => !existing.has(d.id) && [d.ownerId, d.lastEditedById, ...d.collaboratorIds, ...d.readerIds].every((id) => !id || people.has(id)),
   );
   if (missing.length) db.transaction((tx) => insertDocs(tx, missing));
@@ -234,6 +249,24 @@ export function updateDocument(docId: string, personId: string, patch: DocPatch)
     if (contentChanged && doc.ownerId !== personId) {
       tx.insert(schema.documentMembers)
         .values({ docId, personId, role: "collaborator" })
+        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } })
+        .run();
+    }
+  });
+}
+
+/** Hands a document to a new owner. A previous owner who is still at the company stays on as collaborator. */
+export function transferOwnership(docId: string, newOwnerId: string) {
+  const db = orm();
+  db.transaction((tx) => {
+    const doc = tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).get();
+    if (!doc || doc.ownerId === newOwnerId) return;
+    tx.update(schema.documents).set({ ownerId: newOwnerId }).where(eq(schema.documents.id, docId)).run();
+    tx.delete(schema.documentMembers).where(and(eq(schema.documentMembers.docId, docId), eq(schema.documentMembers.personId, newOwnerId))).run();
+    const previous = doc.ownerId ? tx.select().from(schema.people).where(eq(schema.people.id, doc.ownerId)).get() : undefined;
+    if (previous?.active) {
+      tx.insert(schema.documentMembers)
+        .values({ docId, personId: previous.id, role: "collaborator" })
         .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } })
         .run();
     }
