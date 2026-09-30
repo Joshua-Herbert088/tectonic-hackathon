@@ -1,5 +1,6 @@
 import { checkConflicts, type Draft } from "./conflicts";
 import { relevantPeople } from "./contacts";
+import { buildGovernanceSnapshot } from "./governance";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { insertScore, latestScore, latestScoresForViewer, loadWorld, scoreHistory } from "./db";
 import { buildJevState, buildSignals, hashState, relatedDocs, scoreWithJev } from "./trust";
@@ -64,6 +65,7 @@ export function docDetail(docId: string, viewerId: string | null) {
     related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
     people: relevantPeople(db, doc, viewer),
+    governance: buildGovernanceSnapshot(db, doc),
     conflictDecisions: {
       made: db.overrides.filter((o) => o.docId === doc.id),
       against: db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => ({ ...o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId })),

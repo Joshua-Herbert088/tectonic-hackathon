@@ -15,7 +15,7 @@ import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
 import { timeAgo } from "@/lib/time";
-import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type Signal, type TrustScore } from "@/lib/types";
+import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
 
 const LEVEL_NAMES = ["Don't rely on it", "Likely outdated", "Uncertain", "Probably reliable", "Reliable", "Authoritative"];
 
@@ -26,6 +26,7 @@ interface Detail {
   signals: Signal[];
   related: (Omit<Doc, "content"> & { trust: TrustScore | null })[];
   jevInput: unknown;
+  governance: GovernanceSnapshot;
   conflictDecisions: { made: ConflictOverride[]; against: (ConflictOverride & { docTitle: string })[] };
   people: { contacts: Contact[]; former: FormerContributor[] };
 }
@@ -34,6 +35,7 @@ export default function DocPage() {
   const { id } = useParams<{ id: string }>();
   const { viewerId, person, teamName, teams } = useApp();
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [trust, setTrust] = useState<TrustScore | null>(null);
   const [previous, setPrevious] = useState<number | null>(null);
   const [scoring, setScoring] = useState(false);
@@ -76,18 +78,25 @@ export default function DocPage() {
   );
 
   useEffect(() => {
+    setDetail(null);
+    setLoadError(null);
     setTrust(null);
     setPrevious(null);
     setJustVerified(false);
     fetch(`/api/docs/${id}?viewer=${viewerId}`)
-      .then((r) => r.json())
-      .then((d: Detail) => {
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok || !d?.doc) throw new Error(d?.error ?? "Could not load this document.");
+        return d as Detail;
+      })
+      .then((d) => {
         apply(d);
         if (new URLSearchParams(window.location.search).get("edit")) {
           setDraft({ title: d.doc.title, content: d.doc.content });
           setEditing(true);
         }
-      });
+      })
+      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : "Could not load this document."));
   }, [id, viewerId, apply]);
 
   const patch = async (body: Record<string, unknown>) => {
@@ -119,12 +128,19 @@ export default function DocPage() {
     return (
       <div className="flex h-screen flex-col">
         <TopBar showSearch={false} />
-        <div className="grid flex-1 place-items-center text-slate-500">Loading…</div>
+        <div className="grid flex-1 place-items-center text-slate-500">
+          {loadError ? (
+            <div className="text-center">
+              <p>{loadError}</p>
+              <Link href="/" className="mt-2 inline-block text-blue-700 hover:underline">Back to drive</Link>
+            </div>
+          ) : "Loading…"}
+        </div>
       </div>
     );
   }
 
-  const { doc, signals } = detail;
+  const { doc, signals, governance } = detail;
   const owner = person(doc.ownerId);
   const band = trust ? trustBand(trust.score) : null;
   const good = signals.filter((s) => s.tone === "good");
@@ -280,6 +296,40 @@ export default function DocPage() {
               </div>
             )}
             {!owner && <div className="mt-2 text-xs text-[#c5221f]">This document has no owner.</div>}
+          </section>
+
+          <section className="border-b border-slate-100 p-5">
+            <h3 className="mb-2 text-sm font-medium text-slate-800">Governance snapshot</h3>
+            <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+              <span className="text-xs uppercase tracking-wide text-slate-500">Knowledge integrity</span>
+              <span className="text-lg font-semibold text-slate-800">{governance.score}/100</span>
+            </div>
+            <ul className="mb-3 space-y-2 text-sm text-slate-700">
+              {governance.signals.map((signal, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-[#0b57d0]" /> <span>{signal}</span></li>)}
+            </ul>
+            <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Fact graph</div>
+            <ul className="space-y-2 text-xs text-slate-600">
+              {governance.facts.slice(0, 3).map((fact) => (
+                <li key={`${fact.sourceDocId}-${fact.lineNo}`} className="rounded-lg border border-slate-200 p-2">
+                  <div className="font-medium text-slate-800">{fact.subject}</div>
+                  <div>{fact.value} {fact.unit ? `· ${fact.unit}` : ""}</div>
+                  <div>{fact.country ?? fact.office ?? "Global"} · team {fact.teamId ?? doc.teamId} · {fact.approvalStatus}</div>
+                </li>
+              ))}
+            </ul>
+            {governance.versionHistory.length > 0 && (
+              <div className="mt-3">
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Version history</div>
+                <ul className="space-y-2 text-xs text-slate-600">
+                  {governance.versionHistory.slice(0, 3).map((event, index) => (
+                    <li key={`${event.at}-${index}`} className="rounded-lg border border-slate-200 p-2">
+                      <div className="font-medium text-slate-800">{timeAgo(event.at)}</div>
+                      <div className="line-clamp-2">{event.contentPreview}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </section>
 
           {detail.related.length > 0 && (

@@ -34,6 +34,42 @@ export interface View {
   at: string;
 }
 
+export interface FactRecord {
+  subject: string;
+  value: string;
+  unit?: string;
+  country?: string;
+  office?: string;
+  teamId?: string;
+  validFrom?: string;
+  validTo?: string;
+  sourceDocId: string;
+  sourceDocTitle: string;
+  approvalStatus: "draft" | "review" | "active";
+  confidence: number;
+  lineNo: number;
+  rawText: string;
+}
+
+export interface VersionEvent {
+  at: string;
+  personId: string | null;
+  summary: string;
+  contentPreview: string;
+}
+
+export interface GovernanceSnapshot {
+  score: number;
+  facts: FactRecord[];
+  versionHistory: VersionEvent[];
+  overrideSummary: {
+    made: number;
+    against: number;
+    latestReason: string | null;
+  };
+  signals: string[];
+}
+
 export interface Doc {
   id: string;
   title: string;
