@@ -54,7 +54,7 @@ export function NotificationBell() {
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <div>
                 <div className="text-sm font-medium text-slate-900">Notifications</div>
-                <div className="text-[11px] text-slate-500">Changes to information you wrote</div>
+                <div className="text-[11px] text-slate-500">Changes to your documents and to information you wrote</div>
               </div>
               {unread > 0 && <button onClick={() => markRead()} className="text-xs text-blue-700 hover:underline">Mark all as read</button>}
             </div>
@@ -71,6 +71,10 @@ export function NotificationBell() {
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> changed {n.changes.length} line{n.changes.length === 1 ? "" : "s"} you wrote in <span className="font-medium text-slate-900">{n.docTitle}</span>
                           </>
+                        ) : n.kind === "doc_edit" ? (
+                          <>
+                            <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> changed {n.changes.length} line{n.changes.length === 1 ? "" : "s"} in your document <span className="font-medium text-slate-900">{n.docTitle}</span>
+                          </>
                         ) : (
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> saved <span className="font-medium text-slate-900">{n.otherDocTitle}</span>, which contradicts what you wrote in{" "}
@@ -81,7 +85,7 @@ export function NotificationBell() {
                         <div className="mt-2 space-y-1.5">
                           {n.changes.map((c, i) => (
                             <div key={i} className="rounded-lg bg-slate-50 p-2 font-mono text-[11px] leading-4">
-                              <div className="mb-0.5 font-sans text-[10px] uppercase tracking-wide text-slate-400">line {c.lineNo}</div>
+                              <div className="mb-0.5 font-sans text-[10px] uppercase tracking-wide text-slate-400">{c.lineNo === 0 ? "title" : `line ${c.lineNo}`}</div>
                               {c.before !== null && <div className="text-[#a50e0e] line-through decoration-[#a50e0e]/40">− {c.before}</div>}
                               {c.after !== null && <div className="text-[#137333]">+ {c.after}</div>}
                             </div>
@@ -97,7 +101,7 @@ export function NotificationBell() {
                             }}
                             className="font-medium text-blue-700 hover:underline"
                           >
-                            Open {n.kind === "edit" ? "document" : "your document"}
+                            Open {n.kind === "override" ? "your document" : "document"}
                           </button>
                           {n.otherDocId && (
                             <button

@@ -100,11 +100,26 @@ function insertSeed(db: Orm) {
   });
 }
 
-/** Adds demo documents introduced after this database was first seeded, without touching existing data. */
+/**
+ * Adds demo teams, people and documents introduced after this database was first seeded, without
+ * touching existing data.
+ */
 function insertMissingSeedDocs(db: Orm) {
+  const seed = buildSeed();
+  const teamIds = new Set(db.select({ id: schema.teams.id }).from(schema.teams).all().map((t) => t.id));
+  const newTeams = seed.teams.filter((t) => !teamIds.has(t.id));
+  const personIds = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
+  const newPeople = seed.people.filter((p) => !personIds.has(p.id));
+  if (newTeams.length || newPeople.length) {
+    db.transaction((tx) => {
+      if (newTeams.length) tx.insert(schema.teams).values(newTeams).run();
+      if (newPeople.length) tx.insert(schema.people).values(newPeople).run();
+    });
+  }
+
   const existing = new Set(db.select({ id: schema.documents.id }).from(schema.documents).all().map((d) => d.id));
   const people = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
-  const missing = buildSeed().docs.filter(
+  const missing = seed.docs.filter(
     (d) => !existing.has(d.id) && [d.ownerId, d.lastEditedById, ...d.collaboratorIds, ...d.readerIds].every((id) => !id || people.has(id)),
   );
   if (missing.length) db.transaction((tx) => insertDocs(tx, missing));
