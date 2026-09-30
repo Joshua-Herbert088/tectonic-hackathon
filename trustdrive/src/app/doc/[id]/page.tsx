@@ -4,9 +4,12 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
-import { ConflictDialog, selectLine, useConflictGate } from "@/components/ConflictDialog";
+import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
 import { FileIcon } from "@/components/FileIcon";
 import { Markdown } from "@/components/Markdown";
+import { RecentOverlap } from "@/components/RecentOverlap";
+import { WhoToContact } from "@/components/WhoToContact";
+import type { Contact, FormerContributor } from "@/lib/contacts";
 import { StatusPill } from "@/components/StatusPill";
 import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
@@ -24,6 +27,7 @@ interface Detail {
   related: (Omit<Doc, "content"> & { trust: TrustScore | null })[];
   jevInput: unknown;
   conflictDecisions: { made: ConflictOverride[]; against: (ConflictOverride & { docTitle: string })[] };
+  people: { contacts: Contact[]; former: FormerContributor[] };
 }
 
 export default function DocPage() {
@@ -97,9 +101,12 @@ export default function DocPage() {
     apply(await res.json());
   };
 
-  const saveGate = useConflictGate<Detail>({
-    send: (reason) =>
-      fetch(`/api/docs/${id}`, { method: "PATCH", body: JSON.stringify({ viewerId, ...draft, override: reason ? { reason } : undefined }) }),
+  const saveGate = useSaveGate<Detail>({
+    send: ({ overrideReason, acknowledgeSimilar }) =>
+      fetch(`/api/docs/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ viewerId, ...draft, override: overrideReason ? { reason: overrideReason } : undefined, acknowledgeSimilar }),
+      }),
     onSaved: (d) => {
       apply(d);
       setEditing(false);
@@ -128,20 +135,7 @@ export default function DocPage() {
   return (
     <div className="flex h-screen flex-col">
       <TopBar showSearch={false} />
-      {saveGate.check && (
-        <ConflictDialog
-          check={saveGate.check}
-          busy={saveGate.busy}
-          error={saveGate.error}
-          onClose={saveGate.dismiss}
-          onRecheck={() => saveGate.save()}
-          onOverride={(reason) => saveGate.save(reason)}
-          onEditMine={(lineNo) => {
-            saveGate.dismiss();
-            setTimeout(() => selectLine(editorRef.current, lineNo), 50);
-          }}
-        />
-      )}
+      <SaveGateDialogs gate={saveGate} onEditMine={(lineNo) => setTimeout(() => selectLine(editorRef.current, lineNo), 50)} />
       <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4">
         {/* Document */}
         <main className="flex min-w-0 flex-1 flex-col rounded-2xl bg-white">
@@ -193,7 +187,8 @@ export default function DocPage() {
             )}
           </div>
 
-          {saveGate.error && !saveGate.check && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
+          <RecentOverlap docId={doc.id} viewerId={viewerId} />
+          {saveGate.error && !saveGate.mode && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#f9fbfd] py-8">
             <div className="mx-auto min-h-full max-w-[816px] bg-white px-16 py-14 shadow-[0_1px_3px_rgba(60,64,67,.15),0_1px_2px_rgba(60,64,67,.3)]">
               {editing ? (
@@ -272,8 +267,10 @@ export default function DocPage() {
             {neutral.length > 0 && <ul className="space-y-2">{neutral.map((s, i) => <SignalRow key={i} s={s} />)}</ul>}
           </section>
 
+          <WhoToContact contacts={detail.people.contacts} former={detail.people.former} />
+
           <section className="border-b border-slate-100 p-5">
-            <h3 className="mb-3 text-sm font-medium text-slate-800">People</h3>
+            <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
             <PersonRow label="Owner" id={doc.ownerId} />
             {doc.collaboratorIds.map((c) => <PersonRow key={c} label="Collaborator" id={c} />)}
             {doc.readerIds.length > 0 && (

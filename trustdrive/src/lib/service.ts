@@ -1,4 +1,6 @@
 import { checkConflicts, type Draft } from "./conflicts";
+import { relevantPeople } from "./contacts";
+import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { insertScore, latestScore, latestScoresForViewer, loadWorld, scoreHistory } from "./db";
 import { buildJevState, buildSignals, hashState, relatedDocs, scoreWithJev } from "./trust";
 import type { ConflictCheck, Db, Doc, Person, TrustScore } from "./types";
@@ -61,6 +63,7 @@ export function docDetail(docId: string, viewerId: string | null) {
     signals: buildSignals(db, doc, viewer),
     related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
+    people: relevantPeople(db, doc, viewer),
     conflictDecisions: {
       made: db.overrides.filter((o) => o.docId === doc.id),
       against: db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => ({ ...o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId })),
@@ -70,7 +73,7 @@ export function docDetail(docId: string, viewerId: string | null) {
 
 export type GateResult =
   | { ok: true; check: ConflictCheck; overridden: ConflictCheck["hard"] }
-  | { ok: false; response: Response };
+  | { ok: false; status: number; body: Record<string, unknown> };
 
 /**
  * Hard conflicts block a save unless the person explicitly overrides them with a reason.
@@ -81,10 +84,23 @@ export async function gateDraft(db: Db, draft: Draft, override: unknown): Promis
   try {
     check = await checkConflicts(db, draft);
   } catch (e) {
-    return { ok: false, response: Response.json({ error: `Conflict check failed: ${(e as Error).message}` }, { status: 502 }) };
+    return { ok: false, status: 502, body: { error: `Conflict check failed: ${(e as Error).message}` } };
   }
   if (!check.hard.length) return { ok: true, check, overridden: [] };
   const reason = typeof (override as { reason?: unknown })?.reason === "string" ? (override as { reason: string }).reason.trim() : "";
-  if (!reason) return { ok: false, response: Response.json({ error: "conflicts", check }, { status: 409 }) };
+  if (!reason) return { ok: false, status: 409, body: { error: "conflicts", check } };
   return { ok: true, check, overridden: check.hard };
+}
+
+/**
+ * Warn-only redundancy check for content being added. Returns [] when there's nothing to add yet,
+ * the user already acknowledged the warning, or Jev is unavailable (it must never block saving).
+ */
+export async function redundancyCheck(db: Db, text: { title: string; content: string }, opts: { excludeDocId?: string; acknowledged?: unknown }): Promise<SimilarDoc[]> {
+  if (opts.acknowledged === true || !substance(text.content)) return [];
+  try {
+    return await findRedundant(db, text, opts.excludeDocId);
+  } catch {
+    return [];
+  }
 }

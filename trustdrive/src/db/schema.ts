@@ -126,3 +126,35 @@ export const conflictOverrides = sqliteTable(
   },
   (t) => [index("conflict_overrides_doc_idx").on(t.docId), index("conflict_overrides_existing_idx").on(t.existingDocId)],
 );
+
+export interface NotificationChange {
+  /** Line in the document the change happened in (current numbering for edits). */
+  lineNo: number;
+  before: string | null;
+  after: string | null;
+}
+
+/**
+ * Tells the author of a piece of information that someone changed it (an edit to lines they wrote)
+ * or saved a document that contradicts it (a conflict override).
+ */
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    recipientId: text("recipient_id").notNull().references(() => people.id),
+    actorId: text("actor_id").notNull().references(() => people.id),
+    kind: text("kind").$type<"edit" | "override">().notNull(),
+    /** The document the recipient's information lives in. */
+    docId: text("doc_id").notNull(),
+    docTitle: text("doc_title").notNull(),
+    /** For overrides: the document that was saved despite contradicting the recipient's line. */
+    otherDocId: text("other_doc_id"),
+    otherDocTitle: text("other_doc_title"),
+    changes: text("changes", { mode: "json" }).$type<NotificationChange[]>().notNull(),
+    reason: text("reason"),
+    createdAt: text("created_at").notNull(),
+    readAt: text("read_at"),
+  },
+  (t) => [index("notifications_recipient_idx").on(t.recipientId, t.id)],
+);

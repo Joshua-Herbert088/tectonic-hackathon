@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useApp } from "./AppContext";
-import { ConflictDialog, selectLine, useConflictGate } from "./ConflictDialog";
+import { SaveGateDialogs, selectLine, useSaveGate } from "./ConflictDialog";
 import { LOCATIONS, STATUSES, type DocStatus, type Location } from "@/lib/types";
 
 export function UploadDialog({ onClose }: { onClose: () => void }) {
@@ -18,11 +18,11 @@ export function UploadDialog({ onClose }: { onClose: () => void }) {
   const [fileName, setFileName] = useState<string | null>(null);
   const ta = useRef<HTMLTextAreaElement>(null);
 
-  const gate = useConflictGate<{ id: string }>({
-    send: (reason) =>
+  const gate = useSaveGate<{ id: string }>({
+    send: ({ overrideReason, acknowledgeSimilar }) =>
       fetch("/api/docs", {
         method: "POST",
-        body: JSON.stringify({ viewerId, title, content, location, teamId, status, kind: "doc", override: reason ? { reason } : undefined }),
+        body: JSON.stringify({ viewerId, title, content, location, teamId, status, kind: "doc", override: overrideReason ? { reason: overrideReason } : undefined, acknowledgeSimilar }),
       }),
     onSaved: ({ id }) => router.push(`/doc/${id}`),
   });
@@ -42,7 +42,7 @@ export function UploadDialog({ onClose }: { onClose: () => void }) {
       <div className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="border-b border-slate-100 px-6 py-4">
           <h2 className="text-lg font-medium text-slate-900">Upload a document</h2>
-          <p className="text-sm text-slate-600">Before it&apos;s added, Jev checks it against every existing document for contradicting facts.</p>
+          <p className="text-sm text-slate-600">Before it&apos;s added, Jev checks it against every existing document for contradicting facts and duplicate information.</p>
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4">
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm text-slate-600 hover:border-blue-400 hover:bg-blue-50/40">
@@ -64,7 +64,7 @@ export function UploadDialog({ onClose }: { onClose: () => void }) {
           </div>
           <textarea ref={ta} value={content} onChange={(e) => setContent(e.target.value)} placeholder="# Document content (markdown)" className={`${field} h-64 w-full resize-none font-mono leading-6`} />
         </div>
-        {gate.error && <div className="mx-6 mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{gate.error}</div>}
+        {gate.error && !gate.mode && <div className="mx-6 mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{gate.error}</div>}
         <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-3">
           <button onClick={onClose} className="rounded-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">Cancel</button>
           <button
@@ -77,20 +77,7 @@ export function UploadDialog({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {gate.check && (
-        <ConflictDialog
-          check={gate.check}
-          busy={gate.busy}
-          error={gate.error}
-          onClose={gate.dismiss}
-          onRecheck={() => gate.save()}
-          onOverride={(reason) => gate.save(reason)}
-          onEditMine={(lineNo) => {
-            gate.dismiss();
-            setTimeout(() => selectLine(ta.current, lineNo), 50);
-          }}
-        />
-      )}
+      <SaveGateDialogs gate={gate} action="upload" onEditMine={(lineNo) => setTimeout(() => selectLine(ta.current, lineNo), 50)} />
     </div>
   );
 }

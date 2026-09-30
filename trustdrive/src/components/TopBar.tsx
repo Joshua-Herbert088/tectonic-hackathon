@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useApp } from "./AppContext";
+import { NotificationBell } from "./Notifications";
 import type { Person } from "@/lib/types";
 
 export function Avatar({ person, size = 28 }: { person?: Person; size?: number }) {
@@ -52,7 +53,10 @@ export function TopBar({ showSearch = true }: { showSearch?: boolean }) {
       ) : (
         <div className="flex-1" />
       )}
-      <div className="relative ml-auto">
+      <div className="ml-auto">
+        <NotificationBell />
+      </div>
+      <div className="relative">
         <button onClick={() => setOpen(!open)} className="flex items-center gap-3 rounded-full py-1 pl-3 pr-1 hover:bg-slate-200/60">
           <div className="text-right leading-tight">
             <div className="text-xs text-slate-500">Viewing as</div>

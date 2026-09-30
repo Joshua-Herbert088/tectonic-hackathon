@@ -323,6 +323,31 @@ Allowances are entered as recurring payroll input.`,
 4. Still failing: open a ticket with category "Time – Devices" including the terminal serial.`,
     },
     {
+      id: "clocking-cs-copy",
+      title: "Clocking terminals – quick fixes (CS copy)",
+      kind: "doc",
+      ownerId: "nina",
+      collaboratorIds: [],
+      readerIds: ["jonas"],
+      location: "Global",
+      status: "Completed",
+      teamId: "cs",
+      tags: ["clocking", "time", "support"],
+      createdAt: ago(25),
+      updatedAt: ago(25),
+      lastEditedById: "nina",
+      verifications: [],
+      views: views(["nina", "jonas"], 20),
+      content: `# Clocking terminals – quick fixes (CS copy)
+
+Copied from the Time team guide so we have it at hand during customer calls.
+
+1. Terminal offline? Check the PoE port on the switch, then reboot the terminal by holding the power button for 10 seconds.
+2. Badge not recognised: sync the badge list in mysdworx Time > Devices > Sync.
+3. Missing clockings in the counters: make sure the terminal's time zone matches the site.
+4. Still broken: log a ticket in category "Time – Devices" with the terminal serial number.`,
+    },
+    {
       id: "dmfa-checklist",
       title: "DmfA quarterly declaration checklist",
       kind: "doc",
@@ -494,4 +519,27 @@ Gross monthly salaries as of 1 January 2026 (after the 2.0% indexation).
   ];
 
   return { teams, people, docs, overrides: [] };
+}
+
+/**
+ * Plausible edit history for a seeded document, so "who wrote what" has something to work with:
+ * the first author writes the first ~60%, collaborators extend it, and the last editor finishes it.
+ */
+export function seedHistory(doc: Doc): { personId: string | null; at: string; content: string }[] {
+  const lines = doc.content.split("\n");
+  const first = doc.ownerId ?? doc.collaboratorIds[0] ?? doc.lastEditedById;
+  const last = doc.lastEditedById ?? first;
+  const middle = doc.collaboratorIds.filter((c) => c !== first && c !== last).slice(0, 2);
+  const steps = [
+    { personId: first, share: 0.6 },
+    ...middle.map((personId, i) => ({ personId, share: 0.6 + (0.3 * (i + 1)) / (middle.length + 1) })),
+    { personId: last, share: 1 },
+  ];
+  const start = new Date(doc.createdAt).getTime();
+  const end = new Date(doc.updatedAt).getTime();
+  return steps.map((step, i) => ({
+    personId: step.personId,
+    at: new Date(start + ((end - start) * i) / Math.max(steps.length - 1, 1)).toISOString(),
+    content: lines.slice(0, Math.ceil(lines.length * step.share)).join("\n"),
+  }));
 }

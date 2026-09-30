@@ -15,6 +15,13 @@
       "when": 1790792737974,
       "tag": "0001_conflict_overrides",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790794890948,
+      "tag": "0002_notifications",
+      "breakpoints": true
     }
   ]
 }

@@ -15,7 +15,8 @@ export const TRUST_LEVELS = [
 const MAX_CONTENT_CHARS = 6000;
 const MAX_RELATED_EXCERPT = 700;
 
-export function relatedDocs(db: Db, doc: Doc, limit = 4): Doc[] {
+/** Related documents with their relatedness score (≥ 3), strongest first. */
+export function relatedScored(db: Db, doc: Doc, limit = 4): { d: Doc; s: number }[] {
   const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3));
   const titleWords = words(doc.title);
   return db.docs
@@ -29,8 +30,11 @@ export function relatedDocs(db: Db, doc: Doc, limit = 4): Doc[] {
     })
     .filter((x) => x.s >= 3)
     .sort((a, b) => b.s - a.s)
-    .slice(0, limit)
-    .map((x) => x.d);
+    .slice(0, limit);
+}
+
+export function relatedDocs(db: Db, doc: Doc, limit = 4): Doc[] {
+  return relatedScored(db, doc, limit).map((x) => x.d);
 }
 
 function personSummary(db: Db, id: string | null | undefined, now: number) {

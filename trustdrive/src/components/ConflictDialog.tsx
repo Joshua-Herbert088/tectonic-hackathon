@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./AppContext";
 import { timeAgo } from "@/lib/time";
+import type { SimilarDoc } from "@/lib/similarity";
 import type { Conflict, ConflictCheck } from "@/lib/types";
 
 /** Selects a 1-based line in a textarea and scrolls it into view. */
@@ -18,6 +19,7 @@ export function selectLine(ta: HTMLTextAreaElement | null, lineNo: number) {
 
 export function ConflictDialog({
   check,
+  similar = [],
   busy,
   error,
   onEditMine,
@@ -26,6 +28,7 @@ export function ConflictDialog({
   onClose,
 }: {
   check: ConflictCheck;
+  similar?: SimilarDoc[];
   busy: boolean;
   error?: string | null;
   onEditMine: (lineNo: number) => void;
@@ -60,6 +63,12 @@ export function ConflictDialog({
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-6 py-4">
+          {similar.length > 0 && (
+            <div className="rounded-2xl bg-[#fef7e0] p-3">
+              <div className="mb-2 text-sm text-[#7a4a00]">Also: this is very similar to existing information – consider editing the existing document instead.</div>
+              <SimilarList similar={similar} compact />
+            </div>
+          )}
           {check.hard.map((c) => (
             <ConflictCard key={c.key} c={c} onEditMine={() => onEditMine(c.lineNo)} onEditExisting={() => setEditingExisting(c)} />
           ))}
@@ -191,7 +200,7 @@ function ExistingDocEditor({ conflict, onClose, onSaved }: { conflict: Conflict;
     setSaving(true);
     setError(null);
     setBlocking([]);
-    const res = await fetch(`/api/docs/${conflict.existing.docId}`, { method: "PATCH", body: JSON.stringify({ viewerId, content }) });
+    const res = await fetch(`/api/docs/${conflict.existing.docId}`, { method: "PATCH", body: JSON.stringify({ viewerId, content, acknowledgeSimilar: true }) });
     const json = await res.json();
     setSaving(false);
     if (res.ok) onSaved();
@@ -241,26 +250,43 @@ function ExistingDocEditor({ conflict, onClose, onSaved }: { conflict: Conflict;
   );
 }
 
+export interface SaveOptions {
+  overrideReason?: string;
+  acknowledgeSimilar: boolean;
+}
+
 /**
- * Wraps a save request that may come back 409 with conflicts. `send` receives the override reason
- * when the user chose to override; `onSaved` gets the successful JSON response.
+ * Wraps a save request that the server may answer with 409:
+ * - `conflicts`: hard contradictions → must be fixed or overridden with a reason
+ * - `similar`: the content basically duplicates existing documents → warning, can be acknowledged
  */
-export function useConflictGate<T>({ send, onSaved }: { send: (overrideReason?: string) => Promise<Response>; onSaved: (json: T) => void }) {
+export function useSaveGate<T>({ send, onSaved }: { send: (opts: SaveOptions) => Promise<Response>; onSaved: (json: T) => void }) {
   const [check, setCheck] = useState<ConflictCheck | null>(null);
+  const [similar, setSimilar] = useState<SimilarDoc[]>([]);
+  const [mode, setMode] = useState<"conflicts" | "similar" | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const save = async (overrideReason?: string) => {
+  const save = async (overrideReason?: string, acknowledgeSimilar = acknowledged) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await send(overrideReason);
+      const res = await send({ overrideReason, acknowledgeSimilar });
       const json = await res.json();
       if (res.ok) {
+        setMode(null);
         setCheck(null);
+        setSimilar([]);
         onSaved(json);
-      } else if (res.status === 409) setCheck(json.check);
-      else setError(json.error ?? `Save failed (${res.status})`);
+      } else if (res.status === 409 && json.error === "conflicts") {
+        setCheck(json.check);
+        setSimilar(json.similar ?? []);
+        setMode("conflicts");
+      } else if (res.status === 409 && json.error === "similar") {
+        setSimilar(json.similar);
+        setMode("similar");
+      } else setError(json.error ?? `Save failed (${res.status})`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -268,5 +294,98 @@ export function useConflictGate<T>({ send, onSaved }: { send: (overrideReason?: 
     }
   };
 
-  return { save, check, busy, error, dismiss: () => setCheck(null) };
+  /** Continue although similar documents exist (also implied once they were shown next to conflicts). */
+  const saveAnyway = (overrideReason?: string) => {
+    setAcknowledged(true);
+    return save(overrideReason, true);
+  };
+
+  return { save, saveAnyway, check, similar, mode, busy, error, dismiss: () => setMode(null) };
+}
+
+export type SaveGate = ReturnType<typeof useSaveGate>;
+
+/** Renders whichever dialog the last save attempt needs. */
+export function SaveGateDialogs({ gate, onEditMine, action = "save" }: { gate: SaveGate; onEditMine: (lineNo: number) => void; action?: "upload" | "save" }) {
+  if (gate.mode === "conflicts" && gate.check) {
+    return (
+      <ConflictDialog
+        check={gate.check}
+        similar={gate.similar}
+        busy={gate.busy}
+        error={gate.error}
+        onClose={gate.dismiss}
+        onRecheck={() => (gate.similar.length ? gate.saveAnyway() : gate.save())}
+        onOverride={(reason) => gate.saveAnyway(reason)}
+        onEditMine={(lineNo) => {
+          gate.dismiss();
+          onEditMine(lineNo);
+        }}
+      />
+    );
+  }
+  if (gate.mode === "similar") {
+    return <SimilarDialog similar={gate.similar} busy={gate.busy} error={gate.error} action={action} onClose={gate.dismiss} onContinue={() => gate.saveAnyway()} />;
+  }
+  return null;
+}
+
+function SimilarList({ similar, compact }: { similar: SimilarDoc[]; compact?: boolean }) {
+  const { person, teamName } = useApp();
+  return (
+    <ul className="space-y-2">
+      {similar.map((s) => (
+        <li key={s.docId} className={`flex items-center gap-3 rounded-xl bg-white ${compact ? "px-3 py-2" : "p-3"} ring-1 ring-slate-200`}>
+          <div className="min-w-0 flex-1">
+            <a href={`/doc/${s.docId}`} target="_blank" className="truncate text-sm font-medium text-blue-700 hover:underline">{s.title} ↗</a>
+            <div className="text-[11px] text-slate-500">
+              {s.label} · {s.location} · {teamName(s.teamId)} · {s.status} · edited {timeAgo(s.updatedAt)}
+              {s.ownerId && ` · owner ${person(s.ownerId)?.name ?? ""}`}
+            </div>
+          </div>
+          {!compact && (
+            <a href={`/doc/${s.docId}?edit=1`} className="shrink-0 rounded-full bg-[#c2e7ff] px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-[#b3dcf7]">
+              Edit this one instead
+            </a>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function SimilarDialog({ similar, busy, error, action, onClose, onContinue }: { similar: SimilarDoc[]; busy: boolean; error: string | null; action: "upload" | "save"; onClose: () => void; onContinue: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <div className="w-full max-w-xl overflow-hidden rounded-3xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-4 px-6 pt-5">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#fef7e0]">
+            <svg width="22" height="22" viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1Zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H8V7h11v14Z" fill="#b06000" /></svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-medium text-slate-900">This file is very similar to {similar.length === 1 ? "an existing document" : `${similar.length} existing documents`}</h2>
+            <p className="text-sm text-slate-600">
+              Jev found basically the same information already in TrustDrive. Consider editing the existing document instead, so there&apos;s one place to keep up to date.
+            </p>
+          </div>
+        </div>
+        <div className="bg-[#fffdf5] px-6 py-4">
+          <SimilarList similar={similar} />
+        </div>
+        {error && <div className="mx-6 mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-3">
+          <button onClick={onClose} className="rounded-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">Back</button>
+          <button onClick={onContinue} disabled={busy} className="rounded-full bg-[#0b57d0] px-5 py-2 text-sm font-medium text-white hover:bg-[#0842a0] disabled:opacity-50">
+            {busy ? "Saving…" : action === "upload" ? "Upload anyway" : "Save anyway"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

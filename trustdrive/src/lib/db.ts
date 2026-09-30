@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "@/db/schema";
-import { buildSeed } from "./seed";
+import { buildSeed, seedHistory } from "./seed";
 import type { Conflict, Db, Doc, DocStatus, Location, TrustScore } from "./types";
 
 type Orm = BetterSQLite3Database<typeof schema>;
@@ -24,7 +24,10 @@ export function orm(): Orm {
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: path.join(process.cwd(), "drizzle") });
   if (!db.select({ n: sql<number>`count(*)` }).from(schema.teams).get()!.n) insertSeed(db);
-  else insertMissingSeedDocs(db);
+  else {
+    insertMissingSeedDocs(db);
+    backfillSeedHistory(db);
+  }
   g.__trustdriveDb = db;
   return db;
 }
@@ -41,7 +44,51 @@ function insertDocs(tx: Tx, docs: Doc[]) {
     if (members.length) tx.insert(schema.documentMembers).values(members).run();
     if (d.verifications.length) tx.insert(schema.verifications).values(d.verifications.map((v) => ({ docId: d.id, ...v }))).run();
     if (d.views.length) tx.insert(schema.views).values(d.views.map((v) => ({ docId: d.id, ...v }))).run();
+    insertHistory(tx, d, 0);
   }
+}
+
+function insertHistory(tx: Tx, d: Doc, shiftMs: number) {
+  const history = seedHistory(d);
+  tx.insert(schema.edits)
+    .values(
+      history.map((h) => ({
+        docId: d.id,
+        personId: h.personId,
+        at: new Date(new Date(h.at).getTime() + shiftMs).toISOString(),
+        title: d.title,
+        content: h.content,
+        status: d.status,
+        location: d.location,
+        teamId: d.teamId,
+      })),
+    )
+    .run();
+}
+
+/**
+ * Databases seeded before edit history existed have no snapshots for the demo docs. Add the seeded
+ * history (shifted to that database's timestamps) wherever a doc's history doesn't start at creation.
+ */
+function backfillSeedHistory(db: Orm) {
+  const seedDocs = new Map(buildSeed().docs.map((d) => [d.id, d]));
+  const rows = db.select({ id: schema.documents.id, createdAt: schema.documents.createdAt }).from(schema.documents).all();
+  const firstEdit = new Map(
+    db
+      .select({ docId: schema.edits.docId, first: sql<string>`min(${schema.edits.at})` })
+      .from(schema.edits)
+      .groupBy(schema.edits.docId)
+      .all()
+      .map((r) => [r.docId, r.first]),
+  );
+  const todo = rows.filter((r) => seedDocs.has(r.id) && (!firstEdit.has(r.id) || firstEdit.get(r.id)! > r.createdAt));
+  if (!todo.length) return;
+  db.transaction((tx) => {
+    for (const r of todo) {
+      const seed = seedDocs.get(r.id)!;
+      insertHistory(tx, seed, new Date(r.createdAt).getTime() - new Date(seed.createdAt).getTime());
+    }
+  });
 }
 
 function insertSeed(db: Orm) {
@@ -66,7 +113,7 @@ function insertMissingSeedDocs(db: Orm) {
 export function resetDb() {
   const db = orm();
   db.transaction((tx) => {
-    for (const t of [schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.people, schema.teams]) {
+    for (const t of [schema.notifications, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.people, schema.teams]) {
       tx.delete(t).run();
     }
   });
@@ -225,4 +272,49 @@ export function recordOverrides(docId: string, personId: string, reason: string,
       })),
     )
     .run();
+}
+
+/** Content snapshots per document, oldest first – input for blame / contribution analysis. */
+export function loadHistory(docIds?: string[]) {
+  const q = orm()
+    .select({ docId: schema.edits.docId, personId: schema.edits.personId, at: schema.edits.at, content: schema.edits.content })
+    .from(schema.edits);
+  const rows = (docIds ? q.where(inArray(schema.edits.docId, docIds)) : q).orderBy(asc(schema.edits.at), asc(schema.edits.id)).all();
+  const out = new Map<string, { personId: string | null; at: string; content: string }[]>();
+  for (const r of rows) out.set(r.docId, [...(out.get(r.docId) ?? []), r]);
+  return out;
+}
+
+export type NotificationRow = typeof schema.notifications.$inferSelect;
+export type NewNotification = Omit<typeof schema.notifications.$inferInsert, "id" | "createdAt" | "readAt">;
+
+export function insertNotifications(items: NewNotification[]) {
+  if (!items.length) return;
+  const createdAt = new Date().toISOString();
+  orm()
+    .insert(schema.notifications)
+    .values(items.map((n) => ({ ...n, createdAt })))
+    .run();
+}
+
+export function listNotifications(recipientId: string, limit = 30) {
+  const db = orm();
+  const items = db
+    .select()
+    .from(schema.notifications)
+    .where(eq(schema.notifications.recipientId, recipientId))
+    .orderBy(desc(schema.notifications.id))
+    .limit(limit)
+    .all();
+  const unread = db
+    .select({ n: sql<number>`count(*)` })
+    .from(schema.notifications)
+    .where(and(eq(schema.notifications.recipientId, recipientId), isNull(schema.notifications.readAt)))
+    .get()!.n;
+  return { items, unread };
+}
+
+export function markNotificationsRead(recipientId: string, ids?: number[]) {
+  const where = and(eq(schema.notifications.recipientId, recipientId), isNull(schema.notifications.readAt), ids ? inArray(schema.notifications.id, ids) : undefined);
+  orm().update(schema.notifications).set({ readAt: new Date().toISOString() }).where(where).run();
 }

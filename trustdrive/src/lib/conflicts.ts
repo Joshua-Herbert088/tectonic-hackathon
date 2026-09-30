@@ -231,3 +231,14 @@ export async function checkConflicts(db: Db, draft: Draft): Promise<ConflictChec
   cache.set(key, result);
   return result;
 }
+
+/** Language-independent bag of features for a whole text: words, concepts, names and numbers. */
+export function textFeatures(text: string): Set<string> {
+  const out = new Set<string>([...normalizeWords(text), ...conceptsIn(text), ...anchorsIn(text)]);
+  const digits = text.replace(/(\d)[\s  ](?=\d{3}\b)/g, "$1");
+  for (const n of digits.match(/\d+(?:[.,]\d+)*/g) ?? []) {
+    const v = n.replace(/[.,]/g, "");
+    if (v.length >= 2) out.add(`n:${v}`);
+  }
+  return out;
+}
