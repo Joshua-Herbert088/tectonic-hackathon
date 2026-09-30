@@ -147,7 +147,7 @@ export default function Home() {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
             <table className="w-full table-fixed text-sm">
-              <thead className="sticky top-0 bg-white text-left text-slate-600">
+              <thead className="sticky top-0 z-10 bg-white text-left text-slate-600">
                 <tr className="border-b border-slate-200">
                   <th className="px-2 py-3 font-medium">Name</th>
                   <th className="w-44 px-2 font-medium">Owner</th>
