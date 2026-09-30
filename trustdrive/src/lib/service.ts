@@ -1,5 +1,6 @@
 import { checkConflicts, type Draft } from "./conflicts";
 import { relevantPeople } from "./contacts";
+import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { insertScore, latestScore, latestScoresForViewer, loadWorld, scoreHistory } from "./db";
 import { buildJevState, buildSignals, hashState, relatedDocs, scoreWithJev } from "./trust";
@@ -61,6 +62,7 @@ export function docDetail(docId: string, viewerId: string | null) {
     trust: freshOrNull(db, doc, viewer, latestScore(doc.id, viewer.id)),
     history: scoreHistory(doc.id, viewer.id),
     signals: buildSignals(db, doc, viewer),
+    doubts: lineDoubts(db, doc),
     related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
     people: relevantPeople(db, doc, viewer),

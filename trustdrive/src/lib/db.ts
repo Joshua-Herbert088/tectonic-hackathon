@@ -240,6 +240,24 @@ export function updateDocument(docId: string, personId: string, patch: DocPatch)
   });
 }
 
+/** Hands a document to a new owner. A previous owner who is still at the company stays on as collaborator. */
+export function transferOwnership(docId: string, newOwnerId: string) {
+  const db = orm();
+  db.transaction((tx) => {
+    const doc = tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).get();
+    if (!doc || doc.ownerId === newOwnerId) return;
+    tx.update(schema.documents).set({ ownerId: newOwnerId }).where(eq(schema.documents.id, docId)).run();
+    tx.delete(schema.documentMembers).where(and(eq(schema.documentMembers.docId, docId), eq(schema.documentMembers.personId, newOwnerId))).run();
+    const previous = doc.ownerId ? tx.select().from(schema.people).where(eq(schema.people.id, doc.ownerId)).get() : undefined;
+    if (previous?.active) {
+      tx.insert(schema.documentMembers)
+        .values({ docId, personId: previous.id, role: "collaborator" })
+        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } })
+        .run();
+    }
+  });
+}
+
 export function createDocument(doc: Omit<Doc, "collaboratorIds" | "readerIds" | "verifications" | "views">) {
   const db = orm();
   db.transaction((tx) => {

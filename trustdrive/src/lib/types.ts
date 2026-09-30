@@ -96,6 +96,27 @@ export interface ConflictCheck {
   docsChecked: number;
 }
 
+/** A specific line that gives a reader reason to doubt the document. */
+export interface Doubt {
+  key: string;
+  lineNo: number;
+  /** The line as a reader sees it (markdown stripped). */
+  lineText: string;
+  tone: "bad" | "warn";
+  kind: "contradiction" | "override" | "outdated";
+  text: string;
+  /** The other document's line, for contradictions. */
+  source?: Conflict["existing"];
+}
+
+/** Why a document needs a new owner and who could take it over. */
+export interface Handover {
+  reasons: Signal[];
+  successors: { personId: string; why: string[] }[];
+  /** Set when the owner moved teams: they're still around to ask. */
+  formerOwnerId?: string;
+}
+
 /** A recorded decision to save a document despite a hard conflict. */
 export interface ConflictOverride {
   id: number;
