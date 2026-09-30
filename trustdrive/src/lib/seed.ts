@@ -439,6 +439,35 @@ Allowances are entered as recurring payroll input.`,
 - Access to master data follows the least-privilege principle in mysdworx HR.`,
     },
     {
+      id: "salary-register-be",
+      title: "Salary register 2026 – Payroll Belgium team",
+      kind: "sheet",
+      ownerId: "an",
+      collaboratorIds: ["lotte"],
+      readerIds: ["eva"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["salary", "compensation", "payroll-processing"],
+      createdAt: ago(270),
+      updatedAt: ago(10),
+      lastEditedById: "an",
+      verifications: [{ personId: "an", at: ago(10) }],
+      views: views(["eva", "lotte", "an"], 20),
+      content: `# Salary register 2026 – Payroll Belgium team
+
+Gross monthly salaries as of 1 January 2026 (after the 2.0% indexation).
+
+| Employee | Year | Grade | Gross monthly salary |
+|---|---|---|---|
+| Lotte Peeters | 2026 | P4 | €4,850 |
+| Jonas Maes | 2026 | P1 | €3,450 |
+| An Claes | 2026 | M2 | €5,900 |
+
+- Next indexation: 1 January 2027
+- Salary changes require approval by the team lead and HR Operations.`,
+    },
+    {
       id: "input-deadlines",
       title: "Payroll input deadlines Q4 2026",
       kind: "sheet",
@@ -464,5 +493,5 @@ Allowances are entered as recurring payroll input.`,
     },
   ];
 
-  return { teams, people, docs, scores: {} };
+  return { teams, people, docs, overrides: [] };
 }

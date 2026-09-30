@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
+import { ConflictDialog, selectLine, useConflictGate } from "@/components/ConflictDialog";
 import { FileIcon } from "@/components/FileIcon";
 import { Markdown } from "@/components/Markdown";
 import { StatusPill } from "@/components/StatusPill";
@@ -11,16 +12,18 @@ import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
 import { timeAgo } from "@/lib/time";
-import { LOCATIONS, STATUSES, type Doc, type Signal, type TrustScore } from "@/lib/types";
+import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type Signal, type TrustScore } from "@/lib/types";
 
 const LEVEL_NAMES = ["Don't rely on it", "Likely outdated", "Uncertain", "Probably reliable", "Reliable", "Authoritative"];
 
 interface Detail {
   doc: Doc;
   trust: TrustScore | null;
+  history: { score: number; computedAt: string }[];
   signals: Signal[];
   related: (Omit<Doc, "content"> & { trust: TrustScore | null })[];
   jevInput: unknown;
+  conflictDecisions: { made: ConflictOverride[]; against: (ConflictOverride & { docTitle: string })[] };
 }
 
 export default function DocPage() {
@@ -35,6 +38,7 @@ export default function DocPage() {
   const [draft, setDraft] = useState({ title: "", content: "" });
   const [showInput, setShowInput] = useState(false);
   const [justVerified, setJustVerified] = useState(false);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   const trustRef = useRef<TrustScore | null>(null);
   trustRef.current = trust;
 
@@ -46,6 +50,7 @@ export default function DocPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
       setTrust(json.trust);
+      setDetail((d) => d && { ...d, history: [...d.history, { score: json.trust.score, computedAt: json.trust.computedAt }] });
     } catch (e) {
       setScoreError((e as Error).message);
     } finally {
@@ -92,6 +97,15 @@ export default function DocPage() {
     apply(await res.json());
   };
 
+  const saveGate = useConflictGate<Detail>({
+    send: (reason) =>
+      fetch(`/api/docs/${id}`, { method: "PATCH", body: JSON.stringify({ viewerId, ...draft, override: reason ? { reason } : undefined }) }),
+    onSaved: (d) => {
+      apply(d);
+      setEditing(false);
+    },
+  });
+
   const related = useScores(detail?.related ?? null, viewerId);
 
   if (!detail) {
@@ -114,6 +128,20 @@ export default function DocPage() {
   return (
     <div className="flex h-screen flex-col">
       <TopBar showSearch={false} />
+      {saveGate.check && (
+        <ConflictDialog
+          check={saveGate.check}
+          busy={saveGate.busy}
+          error={saveGate.error}
+          onClose={saveGate.dismiss}
+          onRecheck={() => saveGate.save()}
+          onOverride={(reason) => saveGate.save(reason)}
+          onEditMine={(lineNo) => {
+            saveGate.dismiss();
+            setTimeout(() => selectLine(editorRef.current, lineNo), 50);
+          }}
+        />
+      )}
       <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4">
         {/* Document */}
         <main className="flex min-w-0 flex-1 flex-col rounded-2xl bg-white">
@@ -145,13 +173,11 @@ export default function DocPage() {
               <>
                 <button onClick={() => setEditing(false)} className="rounded-full px-4 py-1.5 text-sm text-blue-700 hover:bg-blue-50">Cancel</button>
                 <button
-                  onClick={async () => {
-                    await patch(draft);
-                    setEditing(false);
-                  }}
-                  className="rounded-full bg-[#0b57d0] px-5 py-1.5 text-sm font-medium text-white hover:bg-[#0842a0]"
+                  onClick={() => saveGate.save()}
+                  disabled={saveGate.busy}
+                  className="rounded-full bg-[#0b57d0] px-5 py-1.5 text-sm font-medium text-white hover:bg-[#0842a0] disabled:opacity-60"
                 >
-                  Save
+                  {saveGate.busy ? "Checking for conflicts…" : "Save"}
                 </button>
               </>
             ) : (
@@ -167,10 +193,12 @@ export default function DocPage() {
             )}
           </div>
 
+          {saveGate.error && !saveGate.check && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#f9fbfd] py-8">
             <div className="mx-auto min-h-full max-w-[816px] bg-white px-16 py-14 shadow-[0_1px_3px_rgba(60,64,67,.15),0_1px_2px_rgba(60,64,67,.3)]">
               {editing ? (
                 <textarea
+                  ref={editorRef}
                   value={draft.content}
                   onChange={(e) => setDraft({ ...draft, content: e.target.value })}
                   className="h-[60vh] w-full resize-none font-mono text-sm leading-6 outline-none"
@@ -208,6 +236,7 @@ export default function DocPage() {
             {trust && !scoring && (
               <>
                 <LevelBars probs={trust.levelProbabilities} />
+                {detail.history.length > 1 && <History points={detail.history} />}
                 <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
                   <span>{trust.model} · {Math.round(trust.confidence * 100)}% confident · {trust.latencyMs}ms</span>
                   <button onClick={rescore} className="text-blue-700 hover:underline">Rescore</button>
@@ -277,6 +306,21 @@ export default function DocPage() {
             </section>
           )}
 
+          {(detail.conflictDecisions.made.length > 0 || detail.conflictDecisions.against.length > 0) && (
+            <section className="border-b border-slate-100 p-5">
+              <h3 className="mb-1 text-sm font-medium text-slate-800">Conflict decisions</h3>
+              <p className="mb-3 text-[11px] text-slate-500">Saved despite a contradiction Jev found. Kept permanently for accountability.</p>
+              <ul className="space-y-3">
+                {detail.conflictDecisions.made.map((o) => (
+                  <OverrideRow key={`m${o.id}`} o={o} otherId={o.existingDocId} otherTitle={o.existingTitle} ours={{ no: o.lineNo, text: o.lineText }} theirs={{ no: o.existingLineNo, text: o.existingLineText }} />
+                ))}
+                {detail.conflictDecisions.against.map((o) => (
+                  <OverrideRow key={`a${o.id}`} o={o} otherId={o.docId} otherTitle={o.docTitle} ours={{ no: o.existingLineNo, text: o.existingLineText }} theirs={{ no: o.lineNo, text: o.lineText }} />
+                ))}
+              </ul>
+            </section>
+          )}
+
           <section className="p-5">
             <button onClick={() => setShowInput(!showInput)} className="text-xs text-blue-700 hover:underline">
               {showInput ? "Hide" : "Show"} what Jev sees
@@ -289,6 +333,25 @@ export default function DocPage() {
       </div>
     </div>
   );
+
+  function OverrideRow({ o, otherId, otherTitle, ours, theirs }: { o: ConflictOverride; otherId: string; otherTitle: string; ours: { no: number; text: string }; theirs: { no: number; text: string } }) {
+    const p = person(o.personId);
+    return (
+      <li className="rounded-xl bg-[#fef7e0] p-3 text-xs text-slate-700">
+        <div className="mb-1.5 flex items-center gap-2">
+          <Avatar person={p} size={20} />
+          <span>
+            <span className="font-medium text-slate-900">{p?.name ?? o.personId}</span> overrode {Math.round(o.probability * 100)}% conflict · {timeAgo(o.at)}
+          </span>
+        </div>
+        <div>This doc, line {ours.no}: “{ours.text}”</div>
+        <div>
+          <Link href={`/doc/${otherId}`} className="text-blue-700 hover:underline">{otherTitle}</Link>, line {theirs.no}: “{theirs.text}”
+        </div>
+        <div className="mt-1.5 italic text-slate-600">Reason: {o.reason}</div>
+      </li>
+    );
+  }
 
   function PersonRow({ label, id }: { label: string; id: string | null }) {
     const p = person(id);
@@ -337,6 +400,27 @@ function LevelBars({ probs }: { probs: Record<string, number> }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function History({ points }: { points: { score: number; computedAt: string }[] }) {
+  const w = 300;
+  const h = 36;
+  const x = (i: number) => (i / (points.length - 1)) * (w - 8) + 4;
+  const y = (s: number) => h - 4 - (s / 100) * (h - 8);
+  const d = points.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.score)}`).join(" ");
+  return (
+    <div className="mt-4">
+      <div className="mb-1 text-[11px] text-slate-500">Score history for you ({points.length} scores)</div>
+      <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+        <path d={d} fill="none" stroke="#0b57d0" strokeWidth="1.5" />
+        {points.map((p, i) => (
+          <circle key={i} cx={x(i)} cy={y(p.score)} r="2.5" fill="#0b57d0">
+            <title>{`${p.score} · ${timeAgo(p.computedAt)}`}</title>
+          </circle>
+        ))}
+      </svg>
     </div>
   );
 }

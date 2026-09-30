@@ -1,6 +1,7 @@
-import { readDb, writeDb } from "./db";
+import { checkConflicts, type Draft } from "./conflicts";
+import { insertScore, latestScore, latestScoresForViewer, loadWorld, scoreHistory } from "./db";
 import { buildJevState, buildSignals, hashState, relatedDocs, scoreWithJev } from "./trust";
-import type { Db, Doc, Person, TrustScore } from "./types";
+import type { ConflictCheck, Db, Doc, Person, TrustScore } from "./types";
 
 export const DEFAULT_VIEWER = "jonas";
 
@@ -8,11 +9,9 @@ export function getViewer(db: Db, id: string | null): Person {
   return db.people.find((p) => p.id === id) ?? db.people.find((p) => p.id === DEFAULT_VIEWER)!;
 }
 
-/** Returns the cached score if Jev's inputs haven't changed since it was computed. */
-export function cachedScore(db: Db, doc: Doc, viewer: Person): TrustScore | null {
-  const cached = db.scores[`${doc.id}:${viewer.id}`];
-  if (!cached) return null;
-  return cached.inputHash === hashState(buildJevState(db, doc, viewer)) ? cached : null;
+/** A stored score only counts if Jev's inputs haven't changed since it was computed. */
+function freshOrNull(db: Db, doc: Doc, viewer: Person, stored: TrustScore | null | undefined) {
+  return stored && stored.inputHash === hashState(buildJevState(db, doc, viewer)) ? stored : null;
 }
 
 // Coalesce concurrent requests for the same doc/viewer.
@@ -23,32 +22,69 @@ export function computeScore(docId: string, viewerId: string): Promise<TrustScor
   const existing = inflight.get(key);
   if (existing) return existing;
   const p = (async () => {
-    const db = readDb();
+    const db = loadWorld();
     const doc = db.docs.find((d) => d.id === docId);
     if (!doc) throw new Error("Document not found");
     const viewer = getViewer(db, viewerId);
     const state = buildJevState(db, doc, viewer);
     const result = { ...(await scoreWithJev(state)), inputHash: hashState(state) };
-    const fresh = readDb();
-    fresh.scores[`${doc.id}:${viewer.id}`] = result;
-    writeDb(fresh);
+    insertScore(doc.id, viewer.id, result);
     return result;
   })().finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
 
-export function docSummary(db: Db, doc: Doc, viewer: Person) {
+function summary(db: Db, doc: Doc, viewer: Person, stored: TrustScore | null | undefined) {
   const { content: _content, ...meta } = doc;
-  return { ...meta, excerpt: doc.content.replace(/[#*|>-]/g, " ").slice(0, 160), trust: cachedScore(db, doc, viewer) };
+  return { ...meta, excerpt: doc.content.replace(/[#*|>-]/g, " ").slice(0, 160), trust: freshOrNull(db, doc, viewer, stored) };
 }
 
-export function docDetail(db: Db, doc: Doc, viewer: Person) {
+export function listDocs(viewerId: string | null) {
+  const db = loadWorld();
+  const viewer = getViewer(db, viewerId);
+  const scores = latestScoresForViewer(viewer.id);
+  const docs = [...db.docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((d) => summary(db, d, viewer, scores.get(d.id)));
+  return { viewer, docs };
+}
+
+export function docDetail(docId: string, viewerId: string | null) {
+  const db = loadWorld();
+  const doc = db.docs.find((d) => d.id === docId);
+  if (!doc) return null;
+  const viewer = getViewer(db, viewerId);
+  const scores = latestScoresForViewer(viewer.id);
   return {
     doc,
-    trust: cachedScore(db, doc, viewer),
+    trust: freshOrNull(db, doc, viewer, latestScore(doc.id, viewer.id)),
+    history: scoreHistory(doc.id, viewer.id),
     signals: buildSignals(db, doc, viewer),
-    related: relatedDocs(db, doc).map((r) => docSummary(db, r, viewer)),
+    related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
+    conflictDecisions: {
+      made: db.overrides.filter((o) => o.docId === doc.id),
+      against: db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => ({ ...o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId })),
+    },
   };
+}
+
+export type GateResult =
+  | { ok: true; check: ConflictCheck; overridden: ConflictCheck["hard"] }
+  | { ok: false; response: Response };
+
+/**
+ * Hard conflicts block a save unless the person explicitly overrides them with a reason.
+ * The caller records `overridden` against the saved document.
+ */
+export async function gateDraft(db: Db, draft: Draft, override: unknown): Promise<GateResult> {
+  let check: ConflictCheck;
+  try {
+    check = await checkConflicts(db, draft);
+  } catch (e) {
+    return { ok: false, response: Response.json({ error: `Conflict check failed: ${(e as Error).message}` }, { status: 502 }) };
+  }
+  if (!check.hard.length) return { ok: true, check, overridden: [] };
+  const reason = typeof (override as { reason?: unknown })?.reason === "string" ? (override as { reason: string }).reason.trim() : "";
+  if (!reason) return { ok: false, response: Response.json({ error: "conflicts", check }, { status: 409 }) };
+  return { ok: true, check, overridden: check.hard };
 }

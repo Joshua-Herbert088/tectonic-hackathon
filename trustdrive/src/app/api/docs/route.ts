@@ -1,39 +1,41 @@
 import type { NextRequest } from "next/server";
-import { readDb, writeDb } from "@/lib/db";
-import { docSummary, getViewer } from "@/lib/service";
-import type { Doc } from "@/lib/types";
+import { createDocument, loadWorld, recordOverrides } from "@/lib/db";
+import { gateDraft, getViewer, listDocs } from "@/lib/service";
+import { LOCATIONS, STATUSES } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
-  const db = readDb();
-  const viewer = getViewer(db, req.nextUrl.searchParams.get("viewer"));
-  const docs = [...db.docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((d) => docSummary(db, d, viewer));
-  return Response.json({ viewer, docs });
+  return Response.json(listDocs(req.nextUrl.searchParams.get("viewer")));
 }
 
+/** Creates (uploads) a document. Blocked with 409 on hard conflicts unless `override.reason` is given. */
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const db = readDb();
-  const viewer = getViewer(db, body.viewerId);
+  const world = loadWorld();
+  const viewer = getViewer(world, body.viewerId);
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Untitled document";
+  const content = typeof body.content === "string" ? body.content : "";
+  const location = LOCATIONS.includes(body.location) ? body.location : viewer.location;
+  const teamId = world.teams.some((t) => t.id === body.teamId) ? body.teamId : viewer.teamId;
+
+  const gate = await gateDraft(world, { title, content, location, teamId }, body.override);
+  if (!gate.ok) return gate.response;
+
   const now = new Date().toISOString();
-  const doc: Doc = {
-    id: `doc-${Date.now().toString(36)}`,
-    title: body.title || "Untitled document",
-    kind: "doc",
-    content: body.content ?? "",
+  const id = `doc-${Date.now().toString(36)}`;
+  createDocument({
+    id,
+    title,
+    kind: ["doc", "sheet", "pdf"].includes(body.kind) ? body.kind : "doc",
+    content,
     ownerId: viewer.id,
-    collaboratorIds: [],
-    readerIds: [],
-    location: body.location ?? viewer.location,
-    status: "WIP",
-    teamId: body.teamId ?? viewer.teamId,
-    tags: body.tags ?? [],
+    location,
+    status: STATUSES.includes(body.status) ? body.status : "WIP",
+    teamId,
+    tags: Array.isArray(body.tags) ? body.tags : [],
     createdAt: now,
     updatedAt: now,
     lastEditedById: viewer.id,
-    verifications: [],
-    views: [],
-  };
-  db.docs.push(doc);
-  writeDb(db);
-  return Response.json({ id: doc.id });
+  });
+  recordOverrides(id, viewer.id, body.override?.reason?.trim() ?? "", gate.overridden);
+  return Response.json({ id, conflictCheck: gate.check });
 }

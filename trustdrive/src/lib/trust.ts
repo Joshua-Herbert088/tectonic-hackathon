@@ -63,6 +63,8 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
   const views30 = doc.views.filter((v) => daysSince(v.at, now) <= 30);
   const team = db.teams.find((t) => t.id === doc.teamId)?.name;
   const superseding = doc.supersededById ? db.docs.find((d) => d.id === doc.supersededById) : undefined;
+  const overridesMade = db.overrides.filter((o) => o.docId === doc.id);
+  const overridesAgainst = db.overrides.filter((o) => o.existingDocId === doc.id);
 
   return {
     today: new Date(now).toISOString().slice(0, 10),
@@ -90,6 +92,25 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       viewsLast30Days: views30.length,
       distinctViewersLast30Days: new Set(views30.map((v) => v.personId)).size,
       supersededBy: superseding ? { title: superseding.title, lastEditedDaysAgo: daysSince(superseding.updatedAt, now) } : undefined,
+      savedDespiteConflicts: overridesMade.length
+        ? overridesMade.map((o) => ({
+            conflictsWith: o.existingTitle,
+            thisLine: o.lineText,
+            theirLine: o.existingLineText,
+            overriddenBy: personSummary(db, o.personId, now),
+            daysAgo: daysSince(o.at, now),
+            reason: o.reason,
+          }))
+        : undefined,
+      contradictedByOverriddenDocuments: overridesAgainst.length
+        ? overridesAgainst.map((o) => ({
+            document: db.docs.find((d) => d.id === o.docId)?.title,
+            thisLine: o.existingLineText,
+            theirLine: o.lineText,
+            overriddenBy: personSummary(db, o.personId, now),
+            daysAgo: daysSince(o.at, now),
+          }))
+        : undefined,
       content: doc.content.slice(0, MAX_CONTENT_CHARS),
     },
     relatedDocuments: relatedDocs(db, doc).map((r) => {
@@ -117,49 +138,57 @@ export function hashState(state: JevState) {
   return crypto.createHash("sha1").update(JSON.stringify(rest)).digest("hex").slice(0, 16);
 }
 
-export async function scoreWithJev(state: JevState): Promise<Omit<TrustScore, "inputHash">> {
+/** POSTs a decide request to Jev, retrying on rate limits / overload. */
+interface JevAnswer {
+  type: "score" | "noul" | "choice";
+  score: number;
+  noul: number;
+  confidence: number;
+  probabilities: Record<string, number>;
+}
+
+export async function callJev(body: object): Promise<{ model: string; answers: Record<string, JevAnswer> }> {
   const key = process.env.JEV_API_KEY;
   if (!key) throw new Error("JEV_API_KEY is not set");
   const url = process.env.JEV_API_URL ?? "https://jevtypesafeai.com/api/v1/decide";
 
-  const body = {
-    model: "jev-latest",
-    state,
-    questions: {
-      trust: {
-        type: "score",
-        instructions:
-          "How much can the reader trust that this document is accurate and up to date for their situation? Consider who owns and maintains it and whether they are still at the company, when it was last edited and verified correct, its status, whether it applies to the reader's country and team, whether its content looks current as of today, and whether related documents are newer or contradict it.",
-        criteria: TRUST_LEVELS,
-      },
-    },
-  };
-
-  const started = Date.now();
   let lastError = "";
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ model: "jev-latest", ...body }),
     });
-    if (res.ok) {
-      const json = await res.json();
-      const a = json.answers.trust;
-      return {
-        score: Math.round((a.score / (TRUST_LEVELS.length - 1)) * 100),
-        confidence: a.confidence,
-        levelProbabilities: a.probabilities,
-        model: json.model,
-        computedAt: new Date().toISOString(),
-        latencyMs: Date.now() - started,
-      };
-    }
+    if (res.ok) return res.json();
     lastError = `${res.status} ${await res.text()}`;
     if (![429, 502, 529].includes(res.status)) break;
     await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
   }
   throw new Error(`Jev request failed: ${lastError}`);
+}
+
+export async function scoreWithJev(state: JevState): Promise<Omit<TrustScore, "inputHash">> {
+  const started = Date.now();
+  const json = await callJev({
+    state,
+    questions: {
+      trust: {
+        type: "score",
+        instructions:
+          "How much can the reader trust that this document is accurate and up to date for their situation? Consider who owns and maintains it and whether they are still at the company, when it was last edited and verified correct, its status, whether it applies to the reader's country and team, whether its content looks current as of today, whether related documents are newer or contradict it, and whether anyone saved it despite a known conflict with another document.",
+        criteria: TRUST_LEVELS,
+      },
+    },
+  });
+  const a = json.answers.trust;
+  return {
+    score: Math.round((a.score / (TRUST_LEVELS.length - 1)) * 100),
+    confidence: a.confidence,
+    levelProbabilities: a.probabilities,
+    model: json.model,
+    computedAt: new Date().toISOString(),
+    latencyMs: Date.now() - started,
+  };
 }
 
 /** Human-readable good/bad facts, derived directly from metadata (independent of Jev's score). */
@@ -222,6 +251,15 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
   }
   const draft = db.docs.find((d) => d.id !== doc.id && d.status === "WIP" && relatedDocs(db, doc, 3).includes(d) && d.tags.filter((t) => doc.tags.includes(t)).length >= 2);
   if (draft && doc.status === "Completed") out.push({ tone: "warn", text: `A new version is being drafted: “${draft.title}”` });
+
+  // Conflicts someone chose to override
+  for (const o of db.overrides.filter((o) => o.docId === doc.id)) {
+    out.push({ tone: "warn", text: `Saved despite a conflict with “${o.existingTitle}” (line ${o.existingLineNo}) – overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
+  }
+  for (const o of db.overrides.filter((o) => o.existingDocId === doc.id)) {
+    const other = db.docs.find((d) => d.id === o.docId);
+    out.push({ tone: "warn", text: `“${other?.title ?? "Another document"}” contradicts line ${o.existingLineNo} – conflict overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
+  }
 
   // Old years mentioned as current
   const year = new Date(now).getFullYear();

@@ -69,10 +69,52 @@ export interface Signal {
   text: string;
 }
 
+/** One side-by-side contradiction Jev found between a draft and an existing document. */
+export interface Conflict {
+  key: string;
+  probability: number;
+  severity: "hard" | "possible";
+  lineNo: number;
+  lineText: string;
+  existing: {
+    docId: string;
+    title: string;
+    lineNo: number;
+    lineText: string;
+    location: Location;
+    teamId: string;
+    status: DocStatus;
+    updatedAt: string;
+    ownerId: string | null;
+  };
+}
+
+export interface ConflictCheck {
+  hard: Conflict[];
+  possible: Conflict[];
+  pairsChecked: number;
+  docsChecked: number;
+}
+
+/** A recorded decision to save a document despite a hard conflict. */
+export interface ConflictOverride {
+  id: number;
+  docId: string;
+  personId: string;
+  at: string;
+  reason: string;
+  probability: number;
+  lineNo: number;
+  lineText: string;
+  existingDocId: string;
+  existingTitle: string;
+  existingLineNo: number;
+  existingLineText: string;
+}
+
 export interface Db {
   teams: Team[];
   people: Person[];
   docs: Doc[];
-  /** key: `${docId}:${viewerId}` */
-  scores: Record<string, TrustScore>;
+  overrides: ConflictOverride[];
 }

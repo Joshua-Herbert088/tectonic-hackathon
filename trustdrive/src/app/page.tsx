@@ -9,6 +9,7 @@ import { Avatar, TopBar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
 import { StatusPill } from "@/components/StatusPill";
+import { UploadDialog } from "@/components/UploadDialog";
 import { timeAgo } from "@/lib/time";
 import { LOCATIONS, type Doc, type Location, type TrustScore } from "@/lib/types";
 
@@ -22,6 +23,8 @@ export default function Home() {
   const [docs, setDocs] = useState<DocRow[] | null>(null);
   const [view, setView] = useState<View>({ kind: "all" });
   const [sort, setSort] = useState<"modified" | "trust">("modified");
+  const [newMenu, setNewMenu] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const { trustOf, failed } = useScores(docs, viewerId);
 
   useEffect(() => {
@@ -75,13 +78,36 @@ export default function Home() {
 
   return (
     <div className="flex h-screen flex-col">
+      {uploading && <UploadDialog onClose={() => setUploading(false)} />}
       <TopBar />
       <div className="flex min-h-0 flex-1">
         <aside className="w-64 shrink-0 overflow-y-auto px-3 pb-6">
-          <button onClick={createDoc} className="mb-4 ml-1 flex h-14 items-center gap-3 rounded-2xl bg-white px-5 text-sm font-medium shadow-md hover:bg-[#edf2fa]">
-            <svg width="24" height="24" viewBox="0 0 24 24"><path d="M20 13h-7v7h-2v-7H4v-2h7V4h2v7h7v2Z" fill="#1f1f1f" /></svg>
-            New
-          </button>
+          <div className="relative mb-4 ml-1">
+            <button onClick={() => setNewMenu(!newMenu)} className="flex h-14 items-center gap-3 rounded-2xl bg-white px-5 text-sm font-medium shadow-md hover:bg-[#edf2fa]">
+              <svg width="24" height="24" viewBox="0 0 24 24"><path d="M20 13h-7v7h-2v-7H4v-2h7V4h2v7h7v2Z" fill="#1f1f1f" /></svg>
+              New
+            </button>
+            {newMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setNewMenu(false)} />
+                <div className="absolute left-0 top-0 z-20 w-60 rounded-xl bg-white py-2 shadow-xl ring-1 ring-black/5">
+                  <button onClick={createDoc} className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-slate-100">
+                    <FileIcon kind="doc" /> Blank document
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNewMenu(false);
+                      setUploading(true);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm hover:bg-slate-100"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4v6Zm-4 2h14v2H5v-2Z" fill="#444746" /></svg>
+                    File upload
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <nav className="space-y-0.5">
             {navItem({ kind: "all" }, "My Drive", "🗂")}
             {navItem({ kind: "mine" }, "Owned by me", "👤")}
