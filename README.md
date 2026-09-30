@@ -2,7 +2,7 @@
 
 A Google Drive–style document store where every document carries a **trust score (0–100)** telling you how accurate and up to date it is *for you*, and why.
 
-Built for the SD Worx challenge at the Tectonic hackathon: *"How might we turn fragmented organisational knowledge into a trusted shared resource?"* (Find · Trust · Share). The slides from the brief are the `signal-*.jpg` files in this folder.
+Built for the SD Worx challenge at the Tectonic hackathon: *"How might we turn fragmented organisational knowledge into a trusted shared resource?"* (Find · Trust · Share).
 
 The scoring and checking is done by **[Jev](https://jevtypesafeai.com)**, TypeSafe AI's decision model. Jev returns typed answers (scores, yes/no probabilities) instead of text, in 70–500 ms.
 
