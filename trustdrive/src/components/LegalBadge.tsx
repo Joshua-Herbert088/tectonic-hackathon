@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useApp } from "@/components/AppContext";
+import { citationHref } from "@/lib/handoverDoc";
 import { legalStamp } from "@/lib/legal";
 import { timeAgo } from "@/lib/time";
 import type { Doc } from "@/lib/types";
@@ -18,9 +20,10 @@ function Scales({ size = 12 }: { size?: number }) {
 
 /**
  * Legal & Compliance badge with who validated the document and when. `compact` for lists; the full
- * form on the document page spells out the date and whether the validation is due again.
+ * form on the document page spells out the date, whether the validation is due again, the email it was
+ * given in, and – when the document now contradicts other data (`conflict`) – that it may no longer hold.
  */
-export function LegalBadge({ doc, compact = false }: { doc: Pick<Doc, "teamId" | "verifications">; compact?: boolean }) {
+export function LegalBadge({ doc, compact = false, conflict }: { doc: Pick<Doc, "teamId" | "verifications">; compact?: boolean; conflict?: { docId: string; title: string } | null }) {
   const { person, people } = useApp();
   const stamp = legalStamp(doc, people);
   if (!stamp) return null;
@@ -40,8 +43,10 @@ export function LegalBadge({ doc, compact = false }: { doc: Pick<Doc, "teamId" |
       </span>
     );
   }
+  const source = v?.source;
   return (
-    <div className={`mt-2 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg px-3 py-1.5 text-xs ring-1 ${tone}`} title={title}>
+    <div className="mt-2 max-w-full">
+    <div className={`inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg px-3 py-1.5 text-xs ring-1 ${tone}`} title={title}>
       <span className="inline-flex items-center gap-1.5 font-semibold">
         <Scales size={15} />
         {label}
@@ -55,6 +60,20 @@ export function LegalBadge({ doc, compact = false }: { doc: Pick<Doc, "teamId" |
       ) : (
         <span>Not validated by Legal yet</span>
       )}
+      {source && (
+        <Link href={citationHref(source.conversationId, source.messageId)} className="whitespace-nowrap font-medium underline">
+          in an email →
+        </Link>
+      )}
+    </div>
+    {v && conflict && (
+      <div className="mt-1 flex items-start gap-1.5 text-xs text-[#a50e0e]">
+        <span aria-hidden>⚠</span>
+        <span>
+          This conflicts with other data in the drive (<Link href={`/doc/${conflict.docId}`} className="underline">{conflict.title}</Link>), so this validation might no longer be correct.
+        </span>
+      </div>
+    )}
     </div>
   );
 }

@@ -11,7 +11,7 @@ import { Pool } from "pg";
 import * as schema from "@/db/schema";
 import { config } from "./config";
 import { log } from "./log";
-import { buildBoard, buildConversations, buildSeed, seedActivity, seedHistory } from "./seed";
+import { buildBoard, buildConversations, buildSeed, seedActivity, seedHistory, seedVerificationSources } from "./seed";
 import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
 import { formatLocations } from "./appliesTo";
 import type { ActivityEvent, Answer, BoardThread, SuggestedEdit, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
@@ -116,6 +116,19 @@ async function insertConversations(tx: Tx, conversations: ReturnType<typeof buil
   }
 }
 
+/** Demo validations given in an email: point them at that message once the conversation is there. */
+async function linkVerificationSources(tx: Tx) {
+  for (const l of seedVerificationSources) {
+    const msgs = await tx.select({ id: schema.messages.id }).from(schema.messages).where(eq(schema.messages.conversationId, l.conversationId)).orderBy(asc(schema.messages.sentAt), asc(schema.messages.id));
+    const message = msgs[l.messageIndex];
+    if (!message) continue;
+    await tx
+      .update(schema.verifications)
+      .set({ conversationId: l.conversationId, messageId: message.id })
+      .where(and(eq(schema.verifications.docId, l.docId), eq(schema.verifications.personId, l.personId), isNull(schema.verifications.conversationId)));
+  }
+}
+
 async function insertBoard(tx: Tx, threads: ReturnType<typeof buildBoard>, people: { id: string; name: string; email?: string }[]) {
   const who = (id: string) => {
     const p = people.find((x) => x.id === id)!;
@@ -181,6 +194,7 @@ async function syncSeed(orm: Orm) {
       }
     }
     await insertConversations(tx, conversations);
+    await linkVerificationSources(tx);
     await insertBoard(tx, board, [...seed.people]);
     const newDocs = new Set(docs.map((d) => d.id));
     const overrides = seed.overrides.filter((o) => newDocs.has(o.docId)).map(({ id: _id, ...o }) => o);
@@ -241,7 +255,7 @@ export async function loadWorld(): Promise<Db> {
     folderId: d.folderId ?? undefined,
     collaboratorIds: (membersOf.get(d.id) ?? []).filter((m) => m.role === "collaborator").map((m) => m.personId),
     readerIds: (membersOf.get(d.id) ?? []).filter((m) => m.role === "reader").map((m) => m.personId),
-    verifications: (verifsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
+    verifications: (verifsOf.get(d.id) ?? []).map(({ personId, at, conversationId, messageId }) => ({ personId, at, ...(conversationId && messageId ? { source: { conversationId, messageId } } : {}) })),
     views: (viewsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
   }));
   return { teams, people: peopleRows.map(toPerson), docs, overrides, clients: clientRows.map(toClient), folders: folderRows.map(toFolder), terms };

@@ -15,7 +15,16 @@ export interface LegalStamp {
   /** Maintained by Legal & Compliance. */
   fromLegal: boolean;
   /** The latest validation by someone in Legal, if any. */
-  validation: { personId: string; at: string; days: number; /** Where the validator is now. */ now: "legal" | "moved" | "left"; due: boolean } | null;
+  validation: {
+    personId: string;
+    at: string;
+    days: number;
+    /** Where the validator is now. */
+    now: "legal" | "moved" | "left";
+    due: boolean;
+    /** The email or chat message it was confirmed in. */
+    source?: { conversationId: string; messageId: number };
+  } | null;
 }
 
 /** Null when the document has nothing to do with Legal. */
@@ -29,5 +38,5 @@ export function legalStamp(doc: Pick<Doc, "teamId" | "verifications">, people: P
   if (!latest) return { fromLegal, validation: null };
   const p = byId.get(latest.personId)!;
   const days = Math.floor((now - Date.parse(latest.at)) / DAY);
-  return { fromLegal, validation: { personId: p.id, at: latest.at, days, now: !p.active ? "left" : p.teamId === LEGAL_TEAM_ID ? "legal" : "moved", due: days >= LEGAL_REVALIDATE_DAYS } };
+  return { fromLegal, validation: { personId: p.id, at: latest.at, days, now: !p.active ? "left" : p.teamId === LEGAL_TEAM_ID ? "legal" : "moved", due: days >= LEGAL_REVALIDATE_DAYS, source: latest.source } };
 }

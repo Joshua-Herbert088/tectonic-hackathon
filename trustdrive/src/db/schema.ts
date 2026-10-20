@@ -122,6 +122,9 @@ export const verifications = pgTable(
     docId: text("doc_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
     personId: text("person_id").notNull().references(() => people.id),
     at: text("at").notNull(),
+    /** When it was confirmed in an email or chat ("yes, that's still correct"): that message. */
+    conversationId: text("conversation_id").references((): AnyPgColumn => conversations.id, { onDelete: "set null" }),
+    messageId: integer("message_id").references((): AnyPgColumn => messages.id, { onDelete: "set null" }),
   },
   (t) => [index("verifications_doc_idx").on(t.docId)],
 );

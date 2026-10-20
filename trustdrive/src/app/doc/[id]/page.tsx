@@ -245,6 +245,11 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
   const doubtError = live?.key === docKey ? (live.error ?? null) : null;
 
   const doubts = useMemo(() => [...(detail?.doubts ?? []), ...(liveDoubts ?? [])].sort((a, b) => a.lineNo - b.lineNo || (a.tone === "bad" ? -1 : 1)), [detail?.doubts, liveDoubts]);
+  // The first other document this one contradicts: a validation shown on the page may no longer hold.
+  const contradicted = useMemo(() => {
+    const source = doubts.find((d) => d.kind === "contradiction" && d.source)?.source;
+    return source ? { docId: source.docId, title: source.title } : null;
+  }, [doubts]);
   const marks = useMemo(() => {
     const out: Record<number, LineMark> = {};
     for (const d of doubts) {
@@ -365,7 +370,7 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
                 </span>
                 <span>edited {timeAgo(doc.updatedAt)} by {person(doc.lastEditedById)?.name ?? "unknown"}</span>
               </div>
-              <LegalBadge doc={doc} />
+              <LegalBadge doc={doc} conflict={contradicted} />
             </div>
             {editing ? (
               <div className="flex shrink-0 gap-2">

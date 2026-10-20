@@ -28,6 +28,12 @@ describe("Legal & Compliance badge", () => {
     expect(legalStamp({ teamId: "legal", verifications: [{ personId: "lotte", at: new Date(NOW - DAY).toISOString() }] }, world.people, NOW)).toEqual({ fromLegal: true, validation: null });
   });
 
+  test("a validation given in an email points at that message", () => {
+    const source = { conversationId: "conv-remote-work-check", messageId: 17 };
+    const verifications = [{ personId: "julia", at: new Date(NOW - 390 * DAY).toISOString(), source }];
+    expect(legalStamp({ teamId: "hr-ops", verifications }, world.people, NOW)?.validation).toMatchObject({ personId: "julia", now: "left", due: true, source });
+  });
+
   test("the latest Legal validation wins", () => {
     const verifications = [
       { personId: "julia", at: new Date(NOW - 400 * DAY).toISOString() },

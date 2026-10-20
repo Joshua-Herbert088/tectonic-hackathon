@@ -327,6 +327,28 @@ A: Probably similar – vakantiegeld is 8%. Check with the NL team.`,
 Allowances are entered as recurring payroll input.`,
     },
     {
+      // Newer than the policy above and says otherwise for Belgium: the policy's validation no longer holds.
+      id: "remote-work-be-2026",
+      title: "Remote work allowance 2026 – Belgium",
+      kind: "doc",
+      ownerId: "inge",
+      collaboratorIds: ["eva"],
+      readerIds: ["an", "lotte"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "hr-ops",
+      tags: ["allowance", "policy", "compensation"],
+      createdAt: ago(25),
+      updatedAt: ago(20),
+      lastEditedById: "inge",
+      verifications: [{ personId: "eva", at: ago(18) }],
+      views: views(["an", "lotte"], 15),
+      content: `# Remote work allowance 2026 – Belgium
+
+- Belgium: office allowance of max €154.74/month in 2026 (tax-free, indexed).
+- Paid with the monthly salary as a recurring payroll input.`,
+    },
+    {
       id: "clocking-terminals",
       title: "Clocking terminal troubleshooting guide",
       kind: "doc",
@@ -1398,7 +1420,7 @@ export const SEED_FOLDERS: { id: string; name: string; parentId?: string; docs: 
   { id: "f-clients-delinde", name: "Brouwerij De Linde", parentId: "f-clients", docs: ["client-delinde"] },
   { id: "f-clients-morel", name: "Transports Morel SAS", parentId: "f-clients", docs: ["client-morel"] },
   { id: "f-clients-mueller", name: "Müller Maschinenbau GmbH", parentId: "f-clients", docs: ["client-mueller"] },
-  { id: "f-hr", name: "HR policies", docs: ["remote-work", "expense-policy", "expense-policy-draft", "expense-faq"] },
+  { id: "f-hr", name: "HR policies", docs: ["remote-work", "remote-work-be-2026", "expense-policy", "expense-policy-draft", "expense-faq"] },
   { id: "f-legal", name: "Legal & compliance", docs: ["gdpr-retention", "sar-procedure", "company-car-be"] },
   { id: "f-time", name: "Time & attendance", docs: ["absence-codes"] },
   { id: "f-time-terminals", name: "Clocking terminals", parentId: "f-time", docs: ["clocking-terminals", "clocking-cs-copy", "terminal-models", "clocking-setup-2019"] },
@@ -1573,6 +1595,26 @@ export function buildConversations(now = Date.now()): (Omit<Conversation, "messa
       ],
     },
 
+    {
+      // Julia's "yes, it's correct" is the validation on the remote work allowance policy (seedVerificationSources).
+      id: "conv-remote-work-check",
+      source: "email",
+      title: "Remote work allowance – still correct?",
+      createdAt: ago(391),
+      messages: [
+        {
+          ...colleague("eva", "Eva Janssens"),
+          sentAt: ago(391),
+          body: "Hi Julia,\n\nBefore we publish the remote work allowance policy again: can you confirm the amounts are still correct, especially the €151.70/month for Belgium?\n\nThanks,\nEva",
+        },
+        {
+          ...colleague("julia", "Julia Schmidt"),
+          sentAt: ago(390),
+          body: "Hi Eva,\n\nYes, it's correct: max €151.70/month for Belgium, tax-free. The amounts for the other countries are fine too.\n\nBest regards,\nJulia",
+        },
+      ],
+    },
+
     // Colleagues asking each other: answers.ts keeps these for the next person with the same question.
     {
       id: "conv-qa-overtime-recovery",
@@ -1680,3 +1722,6 @@ export function buildBoard(now = Date.now()) {
     },
   ] as { id: string; title: string; askerId: string; askedAt: string; topics: string[]; locations: string[]; askedIds: string[]; replies: { personId: string; sentAt: string; body: string }[]; solvedReply?: number }[];
 }
+
+/** Demo validations given in an email: Julia confirmed the remote work allowance policy by replying to Eva. */
+export const seedVerificationSources = [{ docId: "remote-work", personId: "julia", conversationId: "conv-remote-work-check", messageIndex: 1 }];

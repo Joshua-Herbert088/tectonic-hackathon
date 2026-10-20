@@ -36,6 +36,14 @@ afterAll(async () => {
 const score = (n: number) => ({ score: n, confidence: 0.9, levelProbabilities: { "3": 1 }, model: "test", computedAt: new Date().toISOString(), inputHash: `h${n}`, latencyMs: 1 });
 
 describe("database", () => {
+  test("a demo validation given in an email points at the reply it was given in", async () => {
+    const world = await loadWorld();
+    const [julia] = world.docs.find((d) => d.id === "remote-work")!.verifications;
+    const [conv] = await loadConversations(["conv-remote-work-check"]);
+    expect(julia).toMatchObject({ personId: "julia", source: { conversationId: "conv-remote-work-check", messageId: conv.messages[1].id } });
+    expect(conv.messages[1]).toMatchObject({ personId: "julia", body: expect.stringContaining("Yes, it's correct") });
+  });
+
   test("seeds the whole demo company", async () => {
     const world = await loadWorld();
     const seed = buildSeed();

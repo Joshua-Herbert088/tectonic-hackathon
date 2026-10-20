@@ -178,6 +178,8 @@ export interface BoardThread {
 export interface Verification {
   personId: string;
   at: string;
+  /** Confirmed in an email or chat ("yes, that's still correct"): that message. */
+  source?: { conversationId: string; messageId: number };
 }
 
 export interface View {

@@ -67,11 +67,13 @@ describe("capturing answers", () => {
   test("keeps the answers in the demo chats, not the private one or the one about a colleague", async () => {
     await captureAnswers();
     const answers = (await loadAnswers()).filter((a) => a.source !== "board");
-    expect(answers.map((a) => a.conversationId).sort()).toEqual(["conv-qa-overtime-hours", "conv-qa-overtime-parttime", "conv-qa-overtime-recovery", "conv-qa-vakantiegeld"]);
+    expect(answers.map((a) => a.conversationId).sort()).toEqual(["conv-qa-overtime-hours", "conv-qa-overtime-parttime", "conv-qa-overtime-recovery", "conv-qa-vakantiegeld", "conv-remote-work-check"]);
+    // Julia left: her answer is kept private, waiting for a consent that won't come, so it's never shown or used.
+    expect(answers.find((a) => a.conversationId === "conv-remote-work-check")).toMatchObject({ answererId: "julia", sharing: "pending" });
     expect(answers.find((a) => a.conversationId === "conv-qa-vakantiegeld")).toMatchObject({ askerId: "emma", answererId: "lars", topics: ["holiday-pay", "compensation"], locations: ["Netherlands"], method: "rules" });
     // Nothing new: a second run adds nothing.
     await captureAnswers();
-    expect((await loadAnswers()).filter((a) => a.source !== "board")).toHaveLength(4);
+    expect((await loadAnswers()).filter((a) => a.source !== "board")).toHaveLength(5);
   });
 
   test("the person who answered decides: Lotte always shares, Lars is asked first", async () => {
