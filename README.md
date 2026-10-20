@@ -6,6 +6,53 @@ Built for the SD Worx challenge at the Tectonic hackathon: *"How might we turn f
 
 The scoring and checking is done by **[Jev](https://jevtypesafeai.com)**, TypeSafe AI's decision model. Jev returns typed answers (scores, yes/no probabilities) instead of text, in 70–500 ms.
 
+## ▶ Try it (jury: start here)
+
+You only need **[Node.js](https://nodejs.org) 22 or newer** (check with `node --version`) and **git**. No database, accounts or API keys: everything is built in.
+
+```bash
+git clone https://github.com/Joshua-Herbert088/tectonic-hackathon.git
+cd tectonic-hackathon/trustdrive
+npm install
+npm run demo
+```
+
+`npm run demo` starts TrustDrive in **demo mode**, opens it in your browser and prints how to sign in:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  TrustDrive is running in demo mode.                │
+│                                                     │
+│  Open      http://localhost:3000                    │
+│  Sign in   demo-51bf29                              │
+│                                                     │
+│  Then switch people with “Viewing as” (top right).  │
+│  Stop with Ctrl+C.                                  │
+└─────────────────────────────────────────────────────┘
+```
+
+1. **Type the code from the box** on the sign-in page (it's new every time you start).
+2. You're **Jonas Maes**, a Belgian payroll consultant. **Viewing as** (top right) lets you become anyone else in the demo company: trust scores depend on who is reading.
+3. **Stop** with Ctrl+C. Your changes are kept for next time; **Reset demo data** (bottom of the sidebar) brings back the original company.
+
+**Good to know**
+- `npm install` may print warnings about install scripts it skipped. They're harmless.
+- Without a Jev API key, trust scores and checks come from built-in rules, and a banner says so. To use Jev: `JEV_API_KEY=jv_live_… npm run demo` (Windows PowerShell: `$env:JEV_API_KEY="jv_live_…"; npm run demo`).
+- Port 3000 in use? The demo takes the next free port: use the address in the box.
+- The browser didn't open? Open the address from the box yourself.
+
+### A 10-minute tour
+1. As Jonas, **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
+2. Open *Overtime policy – Belgium*. Switch to **Marc** (the owner) with **Viewing as**, click **I confirm this document is correct**, and watch it rescore.
+3. Switch to **Lotte Peeters**. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`: it's blocked because it contradicts the confidential salary register (people without access to the register only see *a confidential document*). Override it with a reason, then switch to **An Claes** and open the bell.
+4. Upload `samples/multilingual/planning-paie-decembre-fr.md` (French, contradicts an English deadline sheet) and `samples/multilingual/maladie-salaire-garanti-fr.md` (a French translation of an existing document, so you get the duplicate warning).
+5. Open *Clocking terminal troubleshooting guide*, then *Clocking terminals – quick fixes (CS copy)*: you'll see the "you just saw this" banner.
+6. Switch back to **Jonas**. Open **Handover radar** in the sidebar and reassign a document whose owner left.
+7. Click **Pieter Wouters** at the top of the radar to open his handover briefing. *Client file – Noordkaai Logistics* has a known exception: €0.45/km against the policy's €0.3707/km, with Pieter's reason. Take over the client file and verify it from **First actions**.
+8. In Pieter's briefing, under **Conversations Pieter took part in**, click **Create handover document** for Noordkaai Logistics. The review shows his mailed €0.45/km agreement (already in the client file), the 8 July bonus-input deadline (not written down anywhere) and the unanswered 2027 indexation request (still open); the IBAN and national number from the correction mail are kept out. Click **Check & create document**.
+9. As **Sofie**, click **Reply** next to Els Vermeiren on **For you** and send the simulation: Els disappears from the waiting list. Then send An Claes a **Teams chat** from a document's **People** tab, switch to An, open the bell and answer.
+10. Open **Company & tags**, click the document count of *Compensation & benefits*, then open a document you own, go to **Details** and click **Suggest tags**.
+
 ---
 
 ## What it does
@@ -289,46 +336,47 @@ Lines that look doubtful are underlined in the document itself: lines that only 
 
 ---
 
-## How to run it
+## Running it yourself (development and deployment)
 
-**Requirements:** Node.js 22+ (developed on Node 26). A Jev API key (https://jevtypesafeai.com/pricing) is optional: without one, everything runs on the rule-based fallbacks. Nothing else to install: locally the database is an embedded Postgres (PGlite).
+The quickest way to see it is `npm run demo` (top of this page). For development, settings go in `trustdrive/.env.local` (git-ignored; start from `.env.example`):
+
+| Setting | |
+|---|---|
+| `TRUSTDRIVE_SECRET` | **Required.** At least 32 characters (`openssl rand -hex 32`). Signs sessions and personal sign-in codes. |
+| `DEMO_MODE=1` + `TRUSTDRIVE_ACCESS_CODE` | Demo mode: the shared access code (8+ characters) signs in and **Viewing as** can switch people. Off by default. |
+| `JEV_API_KEY` | Optional ([pricing](https://jevtypesafeai.com/pricing)). Without it, or with `JEV_DISABLED=1`, everything runs on the rule-based fallbacks, labelled as such. |
+| `DATABASE_URL` | Optional: a real Postgres. Without it, an embedded Postgres (PGlite) is kept in `trustdrive/data/pglite`. |
+| `ALLOW_DEMO_RESET=1` | Allows **Reset demo data** in production (it's on with `npm run dev` and in demo runs). |
 
 ```bash
 cd trustdrive
 npm install
-
-# Settings (the file is git-ignored): set TRUSTDRIVE_SECRET (32+ characters), and for the demo
-# DEMO_MODE=1 and TRUSTDRIVE_ACCESS_CODE (what you sign in with),
-# and JEV_API_KEY=jv_live_... for Jev
-cp .env.example .env.local
-
-npm run dev
-# open http://localhost:3000
+cp .env.example .env.local   # then fill in TRUSTDRIVE_SECRET (and the demo settings)
+npm run dev                  # http://localhost:3000
 ```
 
-On first start, the embedded Postgres database is created in `trustdrive/data/pglite`, the migrations in `trustdrive/drizzle/` run, and a demo company is loaded. That's 8 teams, 24 people (some of whom left or moved team), 8 clients (Noordkaai Logistics and Havenstaal BV with 6 email and Teams conversations), and 48 documents in English, Dutch, French and German. Set `DATABASE_URL` to use a real Postgres instead.
+On first start the database is created, the migrations in `trustdrive/drizzle/` run, and the demo company is loaded: 8 teams, 24 people (some of whom left or moved team), 8 clients (Noordkaai Logistics and Havenstaal BV with 6 email and Teams conversations), and 48 documents in English, Dutch, French and German. Demo documents added to `src/lib/seed.ts` later are added to existing databases on startup.
 
 | Command | What it does |
 |---|---|
+| `npm run demo` | Demo mode with nothing to configure (see the top of this page) |
 | `npm run dev` | Development server on :3000 |
 | `npm run build` / `npm start` | Production build and server |
-| `npm run lint` / `npm run typecheck` | ESLint / TypeScript |
+| `npm run signin-code -- jonas lotte` | Prints personal sign-in codes |
 | `npm run check` | Lint, typecheck and tests together (what CI runs, plus a build) |
-| `npm test` | Tests (vitest), against a throwaway in-memory Postgres and never calling Jev: the conflict rules, duplicate estimate, conversation import and handover drafts, the database layer, and the route wrapper |
-| `JEV_EVAL=1 npm test -- conflicts.jev` | Runs the same labelled pairs through Jev and the rules and prints a comparison (calls the paid API, Node 21+) |
-| `npm run db:generate` | Create a migration after changing `src/db/schema.ts` (applied automatically on the next start) |
-| `npm run db:migrate` | Apply migrations now |
-| `npm run db:studio` | Browse the database in the browser |
+| `npm test` | Tests (vitest), against a throwaway in-memory Postgres and never calling Jev |
+| `JEV_EVAL=1 npm test -- conflicts.jev` | Runs the labelled conflict pairs through Jev and the rules and compares them (calls the paid API) |
+| `npm run db:generate` / `db:migrate` / `db:studio` | Create a migration after changing `src/db/schema.ts` / apply migrations now / browse the database |
 
-- **Reset demo data** (bottom of the sidebar) wipes the database and reloads the demo company. It's on with `npm run dev` and off in production (`npm start`, Docker) unless `ALLOW_DEMO_RESET=1`, never without demo data, and at most once a minute.
-- **Limits:** request bodies over 2 MB are refused (12 MB for conversation imports). Saving documents or checking drafts is limited to 30 a minute per person and per sign-in (switching **Viewing as** doesn't reset it) and 300 for everyone together, and saved text to 5 million characters an hour per sign-in and 20 million in all. At most two saves run at once per person and eight in all. The drive holds at most 5,000 documents (500 per owner), 50 million characters of document text and 200 million including history; per person, counted in the database so it holds across restarts and servers, at most 10 million characters saved a day and 20 million in documents they own. Conflict checks look at the first 400 lines of a draft and find candidate lines through a keyword index, with each document's lines extracted once per version. New tags must be in the taxonomy.
-- **History is bounded:** saving again within 10 minutes replaces your own last version instead of adding one, and a document keeps at most 100 versions (always the first, which records who created it).
-- **Sign-in:** everyone signs in as themselves with a **personal sign-in code**. An admin prints them with `npm run signin-code -- jonas lotte` (signed with `TRUSTDRIVE_SECRET`, at least 32 characters; nothing is stored). The session is that person: who edits, verifies, owns or overrides is always who signed in. Without a valid session every page goes to the sign-in page and every API answers 401 (`src/proxy.ts`, and each route checks again); only `/api/health` is open. Without the secret, nobody can sign in. After 20 wrong codes in a minute, sign-in waits for the next minute. Changing the secret signs everyone out and replaces every code; **Sign out** is in the user menu.
-- **Demo mode** (`DEMO_MODE=1`, off by default) is for showing the product: the shared `TRUSTDRIVE_ACCESS_CODE` (at least 8 characters) also signs in, and **Viewing as** (top right) switches between people to show how trust differs per person. Turning demo mode off ends those sessions; people signed in with their own code can never switch.
-- **No network for Jev?** Add `JEV_DISABLED=1` to `.env.local`. Trust scores, conflict checks, duplicate warnings and doubts then all run on the rule-based fallbacks; the UI labels each result as rule-based. Without the flag, the same fallbacks kick in automatically whenever Jev can't be reached.
-- Demo documents added to `src/lib/seed.ts` later are inserted into existing databases automatically on startup.
-- Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time a user opens the drive, all visible documents are scored, which takes a few seconds.
-- **CI:** every push and pull request runs lint, typecheck, tests and a build (`.github/workflows/ci.yml`).
+Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time someone opens the drive, all visible documents are scored, which takes a few seconds. **CI** runs lint, typecheck, tests and a build on every push and pull request (`.github/workflows/ci.yml`).
+
+### Sign-in, permissions and limits
+- **Sign-in:** outside demo mode, everyone signs in as themselves with a **personal sign-in code** (`npm run signin-code -- <person id>`; signed with `TRUSTDRIVE_SECRET`, nothing is stored). Who edits, verifies, owns or overrides is always who signed in, and they can't switch. Without a valid session every page goes to the sign-in page and every API answers 401 (`src/proxy.ts`, and each route checks again); only `/api/health` is open. After 20 wrong codes in a minute, sign-in waits a minute. Changing the secret signs everyone out and replaces every code; **Sign out** is in the user menu.
+- **Demo mode** adds the shared access code and **Viewing as**; turning it off ends those sessions.
+- **Permissions:** everyone reads documents that aren't confidential; confidential ones only their owner, collaborators and readers. A document's text is edited by its owner, collaborators and maintaining team; its status, tags, scope and confidentiality by the owner and collaborators; it's verified by the people accountable for it or Legal; and saved over a conflict only by someone who may edit it, with a reason.
+- **Limits:** request bodies over 2 MB are refused (12 MB for conversation imports). Saves are limited per person and per sign-in (30 a minute, 300 for everyone), at most two at once per person and eight in all. The drive holds at most 5,000 documents (500 per owner), 50 million characters of document text and 200 million with history; per person, counted in the database, 10 million characters saved a day and 20 million in documents they own. New tags must be in the taxonomy.
+- **History is bounded:** saving again within 10 minutes replaces your own last version, and a document keeps at most 100 versions (always the first).
+- **Reset demo data** wipes the database and reloads the demo company: never without demo data, at most once a minute.
 
 ### Docker
 `trustdrive/Dockerfile` builds a production image (Next.js standalone server, non-root, port 8080). A production server needs a real database, so pass `DATABASE_URL`; for a quick try, `PGLITE_DIR=memory://` uses a throwaway embedded database instead.
@@ -341,18 +389,6 @@ docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 -e TRUSTD
 ```
 
 Migrations run on startup; with `MIGRATE_ON_START=false`, run them separately with `node scripts/migrate.mjs` in the same image.
-
-### Suggested demo
-1. With demo mode on, sign in with the access code. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
-2. Open *Overtime policy – Belgium*. Switch to Marc (the owner), click **I confirm this document is correct**, and watch it rescore.
-3. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`. It's blocked because it conflicts with the salary register (shown as *a confidential document* unless you're An, Lotte or Eva). Override it with a reason, then switch to An Claes and open the bell.
-4. Upload `samples/multilingual/planning-paie-decembre-fr.md` (French, conflicts with an English deadline sheet) and `samples/multilingual/maladie-salaire-garanti-fr.md` (a French translation of an existing document, so you get the duplicate warning).
-5. Open *Clocking terminal troubleshooting guide*, then *Clocking terminals – quick fixes (CS copy)*. You'll see the "you just saw this" banner.
-6. Open **Handover radar** in the sidebar (or the tab in the drive) and reassign a document whose owner left.
-7. Still as Jonas, click **Pieter Wouters** at the top of the radar to open his handover briefing. *Client file – Noordkaai Logistics* has a known exception: €0.45/km against the policy's €0.3707/km, with Pieter's reason. Take over the client file and verify it from **First actions**.
-8. In Pieter's briefing, under **Conversations Pieter took part in**, click **Create handover document** for Noordkaai Logistics. The review shows his mailed €0.45/km agreement (already in the client file), the 8 July bonus-input deadline (not written down anywhere), and the unanswered 2027 indexation request (still open). The IBAN and national number from the correction mail are kept out. Click **Check & create document**.
-9. As Sofie, click **Reply** next to Els Vermeiren on **For you** and send the simulation; Els disappears from the waiting list. Then send An Claes a **Teams chat** from a document's **People** tab, switch to An, open the bell and answer.
-10. Open **Company & tags**, click the document count of *Compensation & benefits*, then open a document you own, go to **Details** and click **Suggest tags**.
 
 ### Where things are
 
