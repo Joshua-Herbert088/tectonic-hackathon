@@ -73,6 +73,14 @@ Each document ranks up to 5 active colleagues, with the reasons shown (`src/lib/
 
 People who moved team rank lower and get a note. People who left the company are only listed as former contributors.
 
+### Who knows…? and profiles
+Sometimes the answer isn't a document but a person: who has dealt with this before, who really knows this client, who knows why we do it this way. **Who knows** (sidebar) answers that from work people already do, so there's no profile to fill in or keep up to date (`src/lib/expertise.ts`, `src/app/people/`, `src/app/person/[id]/`):
+- **Ask about a topic, a client or a country**, e.g. *overtime in Belgium*, *Noordkaai* or *wie kent de overuren?*. The question is matched to topics (by their names and keywords in four languages), clients and countries, and the page shows how it was read. If nothing is recognised, it searches the text of documents and conversations instead. Searching the drive shows the top three people above the results too.
+- **Evidence is only what someone produced:** owning a document, the share of its current text they wrote (from the line-level blame), edits, verifications, exceptions they kept on purpose with their reason, and messages in client conversations. Reading a document never counts. Every person comes with that evidence, linked to the document or conversation.
+- **It stays current by itself:** evidence counts fully for three months, then half as much for every year after that. Ownership doesn't fade while someone is at the company. People who moved team get a note (and rank lower if they haven't worked on it since), and people who left are listed separately with a link to their handover briefing.
+- **Profile** (`/person/<id>`, or **Profile** next to any contact): the topics and clients someone knows, strongest first, each with its evidence and *fading* when nothing happened in a year; the documents they're in charge of; the exceptions they explained (*Knows why*); and who they work with most, through the same documents and conversations.
+- **"Not me any more":** on your own profile you can take a topic or client off; you're then no longer suggested for it, and only you still see it. That's the only human step.
+
 ### Notifications
 The bell in the top bar notifies people when their information changes (`src/lib/notify.ts`):
 - **Line authors** hear when lines they wrote are changed or removed, with before/after.

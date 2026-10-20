@@ -27,6 +27,8 @@ export const people = pgTable(
     phone: text("phone"),
     /** The clients this person chose to see. Null: their team's clients (the default). */
     clientIds: jsonb("client_ids").$type<string[]>(),
+    /** Topics and clients ("topic:salary", "client:noordkaai") the person took off their own expertise profile. */
+    hiddenExpertise: jsonb("hidden_expertise").$type<string[]>(),
   },
   // People are looked up by email.
   (t) => [uniqueIndex("people_email_idx").on(t.email)],

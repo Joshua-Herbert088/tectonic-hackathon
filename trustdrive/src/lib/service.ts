@@ -4,7 +4,8 @@ import { relevantPeople } from "./contacts";
 import { buildGovernanceSnapshot } from "./governance";
 import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
-import { documentSources, insertScore, latestScore, latestScoresForViewer, loadConversations, loadWorld, scoreHistory } from "./db";
+import { documentSources, insertScore, latestScore, latestScoresForViewer, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
 import { GLOBAL, taxonomyOf } from "./taxonomy";
 import { ruleKind, statementsOf } from "./handoverDraft";
@@ -116,6 +117,21 @@ export async function handoverBriefing(predecessorId: string, viewer: Person) {
     ...briefing,
     docs: briefing.docs.map((d) => ({ ...d, doc: { ...d.doc, trust: freshOrNull(db, db.docs.find((x) => x.id === d.doc.id)!, viewer, scores.get(d.doc.id)) } })),
   };
+}
+
+/** "Who knows X?": colleagues ranked by the evidence on what the question is about. An empty question gets starting points. */
+export async function whoKnowsFor(query: string, viewer: Person) {
+  const [db, history, conversations] = await Promise.all([loadWorld(), loadHistory(), loadConversations()]);
+  if (!query.trim()) return { suggestions: suggestions(db, myClients(viewer, db.clients)) };
+  return whoKnows(db, buildLedger(db, history, conversations), conversations, query, viewer);
+}
+
+/** Someone's expertise profile, built from their work; null when there's no such person. */
+export async function personProfile(personId: string, viewer: Person) {
+  const [db, history, conversations] = await Promise.all([loadWorld(), loadHistory(), loadConversations()]);
+  const person = db.people.find((p) => p.id === personId);
+  if (!person) return null;
+  return profileOf(db, buildLedger(db, history, conversations), conversations, person, viewer);
 }
 
 /** What the client asks in the last message of a conversation, when that message is theirs and asks something. */

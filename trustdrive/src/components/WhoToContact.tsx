@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useApp } from "./AppContext";
 import { useCompose } from "./Compose";
@@ -69,13 +70,17 @@ export function WhoToContact({ docTitle, contacts, former }: { docTitle: string;
   );
 }
 
-/** Email and Teams chat (written inside TrustDrive) and a phone link; by default indented to line up with a contact's name. */
-export function ContactLinks({ person, subject, className = "mb-1 pl-11" }: { person: Person; subject: string; className?: string }) {
+/**
+ * Their profile, email and Teams chat (written inside TrustDrive) and a phone link; by default indented to
+ * line up with a contact's name.
+ */
+export function ContactLinks({ person, subject, className = "mb-1 pl-11", profile = true }: { person: Person; subject: string; className?: string; profile?: boolean }) {
   const compose = useCompose();
   const to = [{ personId: person.id, name: person.name, email: person.email }];
   const link = "text-blue-700 hover:underline";
   return (
     <div className={`flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${className}`}>
+      {profile && <Link href={`/person/${person.id}`} title={`What ${person.name} knows, from their work`} className={link}>Profile</Link>}
       {person.active && (
         <>
           <button onClick={() => compose({ source: "email", to, subject })} title={person.email} className={link}>Email</button>

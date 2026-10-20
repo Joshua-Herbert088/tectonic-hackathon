@@ -78,6 +78,13 @@
       "when": 1792341939353,
       "tag": "0010_trash_and_my_clients",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792483777851,
+      "tag": "0011_expertise_opt_outs",
+      "breakpoints": true
     }
   ]
 }

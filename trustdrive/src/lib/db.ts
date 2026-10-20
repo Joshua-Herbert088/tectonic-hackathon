@@ -228,6 +228,7 @@ export async function loadWorld(): Promise<Db> {
     email: p.email ?? undefined,
     phone: p.phone ?? undefined,
     clientIds: p.clientIds ?? undefined,
+    hiddenExpertise: p.hiddenExpertise ?? undefined,
   }));
   const clients = clientRows.map((c) => ({ ...c, domain: c.domain ?? undefined }));
   return { teams, people, docs, overrides, clients, folders: folderRows.map(toFolder), terms };
@@ -344,6 +345,11 @@ export async function deleteDocumentForever(docId: string) {
 /** The clients a person chose to see; null goes back to their team's clients. */
 export async function setPersonClients(personId: string, clientIds: string[] | null) {
   await (await db()).update(schema.people).set({ clientIds }).where(eq(schema.people.id, personId));
+}
+
+/** The topics and clients a person took off their expertise profile; an empty list shows everything again. */
+export async function setHiddenExpertise(personId: string, subjects: string[]) {
+  await (await db()).update(schema.people).set({ hiddenExpertise: subjects.length ? subjects : null }).where(eq(schema.people.id, personId));
 }
 
 export interface DocPatch {
@@ -574,7 +580,7 @@ export async function documentSources(docId: string) {
 export async function findPerson(by: { id: string } | { email: string }) {
   const where = "id" in by ? eq(schema.people.id, by.id) : sql`lower(${schema.people.email}) = ${by.email.toLowerCase()}`;
   const [p] = await (await db()).select().from(schema.people).where(where).limit(1);
-  return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined } : null;
+  return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined, hiddenExpertise: p.hiddenExpertise ?? undefined } : null;
 }
 
 /** Liveness of the database, for the health check. */

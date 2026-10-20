@@ -22,6 +22,8 @@ export interface Person {
   leftAt?: string;
   /** The clients they chose to see; unset = their team's clients. */
   clientIds?: string[];
+  /** Topics and clients they took off their expertise profile ("topic:salary", "client:noordkaai"). */
+  hiddenExpertise?: string[];
   /** Set when the person moved to a different team; teamId is the current one. */
   previousTeamId?: string;
   movedTeamAt?: string;

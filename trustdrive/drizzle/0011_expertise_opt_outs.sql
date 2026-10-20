@@ -1,0 +1,1 @@
+ALTER TABLE "people" ADD COLUMN "hidden_expertise" jsonb;

@@ -7,6 +7,7 @@ import { Fragment, Suspense, useCallback, useEffect, useMemo, useState } from "r
 import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
 import { FileIcon } from "@/components/FileIcon";
+import { ExpertsStrip } from "@/components/Expertise";
 import { exposure, HandoverRadar } from "@/components/HandoverRadar";
 import { Icon } from "@/components/Icons";
 import { Avatar } from "@/components/TopBar";
@@ -424,6 +425,7 @@ function Drive() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-2 sm:px-4">
+        {view !== "trash" && <ExpertsStrip query={search} />}
         {view === "trash" ? (
           <TrashView onRestored={() => setReload((n) => n + 1)} />
         ) : view === "radar" && docs ? (
