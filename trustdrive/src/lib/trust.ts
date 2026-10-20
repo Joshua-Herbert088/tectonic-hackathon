@@ -44,12 +44,24 @@ function sameScope(doc: Doc, d: Doc) {
   return countries && (!d.clientId || d.clientId === doc.clientId);
 }
 
-/** Related documents with their relatedness score (≥ 3), strongest first. Only ones in the same scope (sameScope). */
+/**
+ * Whether `d` may say something about `doc`'s trust (be "a newer version", "a draft of it", context for
+ * Jev): it supersedes or is superseded by it, or it's in the same scope and comes from the people
+ * accountable for `doc` – the team that maintains it, or its owner or a collaborator. Shared tags and
+ * title words alone never do: anyone can copy those onto an upload.
+ */
+export function vouchedFor(doc: Doc, d: Doc) {
+  if (d.supersededById === doc.id || doc.supersededById === d.id) return true;
+  const fromMaintainers = d.teamId === doc.teamId || (!!d.ownerId && (d.ownerId === doc.ownerId || doc.collaboratorIds.includes(d.ownerId)));
+  return fromMaintainers && sameScope(doc, d);
+}
+
+/** Related documents with their relatedness score (≥ 3), strongest first. Only ones vouched for (vouchedFor). */
 export function relatedScored(db: Db, doc: Doc, limit = 4): { d: Doc; s: number }[] {
   const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3));
   const titleWords = words(doc.title);
   return db.docs
-    .filter((d) => d.id !== doc.id && (sameScope(doc, d) || d.supersededById === doc.id || doc.supersededById === d.id))
+    .filter((d) => d.id !== doc.id && vouchedFor(doc, d))
     .map((d) => {
       let s = d.tags.filter((t) => doc.tags.includes(t)).length * 2;
       if (d.teamId === doc.teamId) s += 1;

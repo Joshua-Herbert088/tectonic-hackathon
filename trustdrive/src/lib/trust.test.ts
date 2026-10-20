@@ -68,6 +68,45 @@ describe("related documents are in the same scope", () => {
     expect(signals.some((t) => t.includes("lookalike") || /more recent|being drafted/.test(t))).toBe(false);
   });
 
+  test("copied tags from someone outside the team plant nothing, even in the same country or Global", () => {
+    const be = doc("overtime-be");
+    const outsider = world.people.find((p) => p.active && p.teamId !== be.teamId && p.id !== be.ownerId && !be.collaboratorIds.includes(p.id))!;
+    const planted = (id: string, status: Doc["status"], locations: string[]): Doc => ({
+      ...be,
+      id,
+      title: `${be.title} – update`,
+      status,
+      locations,
+      ownerId: outsider.id,
+      teamId: outsider.teamId,
+      collaboratorIds: [],
+      readerIds: [],
+      createdAt: days(0),
+      updatedAt: days(0),
+      supersededById: undefined,
+    });
+    const db = withDoc(planted("planted-completed", "Completed", ["Belgium"]));
+    db.docs.push(planted("planted-draft", "WIP", ["Global"]));
+    const stale = { ...be, updatedAt: days(400) };
+    const dbStale = { ...db, docs: db.docs.map((d) => (d.id === be.id ? stale : d)) };
+    const related = relatedDocs(dbStale, stale, 10).map((d) => d.id);
+    expect(related).not.toContain("planted-completed");
+    expect(related).not.toContain("planted-draft");
+    expect(JSON.stringify(buildJevState(dbStale, stale, person("jonas")).relatedDocuments)).not.toContain("update");
+    const signals = buildSignals(dbStale, { ...stale, status: "Completed" }, person("jonas")).map((s) => s.text);
+    expect(signals.filter((t) => t.includes("update"))).toEqual([]);
+  });
+
+  test("the maintaining team, or the document's own owner and collaborators, still relate", () => {
+    const be = doc("overtime-be");
+    const collaborator = world.people.find((p) => p.active && p.teamId !== be.teamId)!;
+    const target = { ...be, collaboratorIds: [...be.collaboratorIds, collaborator.id] };
+    const fromCollaborator = { ...be, id: "by-collaborator", title: `${be.title} 2027`, ownerId: collaborator.id, teamId: collaborator.teamId, updatedAt: days(0), supersededById: undefined };
+    const fromTeam = { ...be, id: "by-team", title: `${be.title} 2028`, ownerId: null, updatedAt: days(0), supersededById: undefined };
+    const db = { ...world, docs: [...world.docs.filter((d) => d.id !== be.id), target, fromCollaborator, fromTeam] };
+    expect(relatedDocs(db, target, 10).map((d) => d.id)).toEqual(expect.arrayContaining(["by-collaborator", "by-team"]));
+  });
+
   test("a document in the same country still is", () => {
     const be = doc("overtime-be");
     const sameCountry = { ...be, id: "overtime-be-2027", title: `${be.title} 2027`, updatedAt: days(0), supersededById: undefined };
