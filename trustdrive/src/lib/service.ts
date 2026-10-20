@@ -398,6 +398,29 @@ export function checkAppliesTo(db: Db, locations: string[] | undefined, audience
 }
 
 /**
+ * Tags a document gets must be in the taxonomy. Ones it already has may stay: a removed term remains
+ * on documents (shown as untracked) until someone retags them.
+ */
+export function checkTags(db: Db, tags: string[] | undefined, existing: string[] = []) {
+  const tax = taxonomyOf(db.terms);
+  const unknown = tags?.find((t) => !existing.includes(t) && !tax.isKnownTag(t));
+  if (unknown !== undefined) throw new HttpError(400, `“${unknown}” isn't a tag in the taxonomy. Add it on the Company & tags page first.`);
+}
+
+/** Owner or collaborator: the people who may change a document's status, tags, scope and confidentiality. */
+export const maintains = (doc: Pick<Doc, "ownerId" | "collaboratorIds">, person: Person) => doc.ownerId === person.id || doc.collaboratorIds.includes(person.id);
+
+/**
+ * Who may give a document a new owner: its owner at any time. When it needs one (no owner, or the owner
+ * left or moved team), also its collaborators, the team that maintains it and the suggested successors.
+ */
+export function mayReassign(db: Db, doc: Doc, person: Person) {
+  if (doc.ownerId === person.id) return true;
+  const handover = handoverFor(doc, db.people, db.teams);
+  return !!handover && person.active && (maintains(doc, person) || person.teamId === doc.teamId || handover.successors.some((s) => s.personId === person.id));
+}
+
+/**
  * A document needs a document type and a topic as soon as it has content: an upload when it's added, a
  * blank document when it's first saved, and an older untagged document on its next save.
  */
@@ -427,6 +450,20 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
     clientId: body.clientId === null || world.clients.some((c) => c.id === body.clientId) ? body.clientId : undefined,
     confidential: body.confidential,
   };
+  checkTags(world, patch.tags, doc.tags);
+  // The page lets only the owner and collaborators change these; the server holds to that too. Tags are
+  // open to anyone while the document is missing required ones, since saving content needs them.
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const sorted = (xs: string[] | undefined) => xs && [...xs].sort();
+  const restricted = [
+    patch.status !== undefined && patch.status !== doc.status && "status",
+    patch.confidential !== undefined && patch.confidential !== !!doc.confidential && "confidentiality",
+    patch.clientId !== undefined && !same(patch.clientId, doc.clientId) && "client",
+    patch.locations !== undefined && !same(sorted(patch.locations), sorted(doc.locations)) && "countries",
+    patch.audienceTeamIds !== undefined && !same(sorted(patch.audienceTeamIds), sorted(doc.audienceTeamIds)) && "teams",
+    patch.tags !== undefined && !same(sorted(patch.tags), sorted(doc.tags)) && !taxonomyOf(world.terms).missingTags(doc.tags).length && "tags",
+  ].filter((x): x is string => !!x);
+  if (restricted.length && !maintains(doc, viewer)) throw new HttpError(403, `Only the owner and collaborators can change the ${restricted.join(", ")} of this document.`);
   const confidential = patch.confidential ?? !!doc.confidential;
   const title = patch.title ?? doc.title;
   const content = patch.content ?? doc.content;

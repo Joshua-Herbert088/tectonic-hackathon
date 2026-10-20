@@ -20,6 +20,15 @@ describe("route wrapper", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).issues[0]).toMatch(/^n:/);
   });
+  test("an oversized body is a 413, whether or not its size is declared", async () => {
+    const big = JSON.stringify({ n: 1, pad: "x".repeat(2_100_000) });
+    expect((await route(post(big))).status).toBe(413);
+    const undeclared = new Request("http://x/api", { method: "POST", body: new Blob([big]).stream(), duplex: "half" } as RequestInit);
+    expect(undeclared.headers.get("content-length")).toBeNull();
+    expect((await route(undeclared)).status).toBe(413);
+    const small = handle(async (req: Request) => Response.json(await readBody(req, z.object({ n: z.number() }), 10)));
+    expect((await small(post('{"n":1, "more": true}'))).status).toBe(413);
+  });
   test("HttpErrors keep their status; anything else is a 500 without internals", async () => {
     expect((await handle(async () => { throw new HttpError(404, "Not found"); })(post("{}"))).status).toBe(404);
     const res = await handle(async () => { throw new Error("secret detail"); })(post("{}"));

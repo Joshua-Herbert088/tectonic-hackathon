@@ -316,7 +316,8 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 | `npm run db:migrate` | Apply migrations now |
 | `npm run db:studio` | Browse the database in the browser |
 
-- **Reset demo data** (bottom of the sidebar) wipes the database and reloads the demo company.
+- **Reset demo data** (bottom of the sidebar) wipes the database and reloads the demo company. It's on with `npm run dev` and off in production (`npm start`, Docker) unless `ALLOW_DEMO_RESET=1`, never without demo data, and at most once a minute.
+- **Limits:** request bodies over 2 MB are refused (12 MB for conversation imports), and saving documents or checking drafts is limited to 30 a minute per person and 300 for everyone together. New tags must be in the taxonomy.
 - **Sign-in:** everyone signs in with one shared access code (`TRUSTDRIVE_ACCESS_CODE`, at least 8 characters). Without a valid session every page goes to the sign-in page and every API answers 401 (`src/proxy.ts`, and each route checks again); only `/api/health` is open. Without the setting, nobody can sign in. After 20 wrong codes in a minute, sign-in waits for the next minute. Changing the code signs everyone out; **Sign out** is in the user menu.
 - **Viewing as** then picks who you are. The choice is kept in the signed session cookie and the server decides who's asking: requests can't claim to be someone else, and a forged or edited cookie counts as signed out.
 - **No network for Jev?** Add `JEV_DISABLED=1` to `.env.local`. Trust scores, conflict checks, duplicate warnings and doubts then all run on the rule-based fallbacks; the UI labels each result as rule-based. Without the flag, the same fallbacks kick in automatically whenever Jev can't be reached.
@@ -330,7 +331,7 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 ```bash
 cd trustdrive
 docker build -t trustdrive .
-docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 -e TRUSTDRIVE_ACCESS_CODE=choose-a-code trustdrive
+docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 -e TRUSTDRIVE_ACCESS_CODE=choose-a-code -e ALLOW_DEMO_RESET=1 trustdrive
 # open http://localhost:8080 · /api/health answers when the database does
 ```
 
@@ -395,7 +396,7 @@ trustdrive/
 ## Unfinished / known limitations
 
 **Not a real product yet**
-- **One shared access code, no per-person login or permissions.** Anyone with the code can be anyone: "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team fields are limited to the owner and collaborators. There's no admin screen: people are added to the `people` table with SQL.
+- **One shared access code, no per-person login or permissions.** Anyone with the code can be anyone: "Viewing as" is a user switcher and anyone can edit any document's content. The status, tags, countries, teams, client and confidentiality are limited to the owner and collaborators, handing a document over to its owner (or, once it needs a new owner, its team, collaborators and suggested successors), and verifying to the people accountable for it. There's no admin screen: people are added to the `people` table with SQL.
 - **No real Google Drive integration.** Documents live in TrustDrive's own Postgres database.
 - **Uploads are text only** (`.md` / `.txt`). No PDF, Word or spreadsheet parsing; "sheet" and "pdf" are only icons.
 - **Missing drive features:** sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.

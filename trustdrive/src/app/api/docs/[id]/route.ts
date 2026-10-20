@@ -3,6 +3,7 @@ import { deleteDocumentForever, loadTrash, recordActivity, recordOpen } from "@/
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
 import { quietNotice } from "@/lib/quiet";
+import { limitWrites } from "@/lib/rateLimit";
 import { documentPatch } from "@/lib/schemas";
 import { docDetail, editDocument } from "@/lib/service";
 
@@ -30,6 +31,7 @@ export const GET = handle(async (req, ctx: Ctx) => {
 export const PATCH = handle(async (req, ctx: Ctx) => {
   const { id } = await ctx.params;
   const viewer = await requireViewer(req);
+  limitWrites(viewer.id);
   const { status, body } = await editDocument(viewer, id, await readBody(req, documentPatch));
   return Response.json(body, { status });
 });

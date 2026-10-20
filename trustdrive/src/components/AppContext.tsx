@@ -12,6 +12,8 @@ interface Ctx {
   viewerId: string;
   /** Demo mode only: view the drive as someone else. */
   canSwitch: boolean;
+  /** Whether this server allows "Reset demo data". */
+  canReset: boolean;
   setViewerId: (id: string) => Promise<void>;
   people: Person[];
   teams: Team[];
@@ -50,7 +52,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 function SignedIn({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const [session, setSession] = useState<{ viewerId: string; canSwitch: boolean } | null>(null);
+  const [session, setSession] = useState<{ viewerId: string; canSwitch: boolean; canReset: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -74,7 +76,7 @@ function SignedIn({ children }: { children: React.ReactNode }) {
     };
     Promise.all([json("/api/session"), json("/api/meta")])
       .then(([s, m]) => {
-        setSession({ viewerId: s.viewer.id, canSwitch: s.canSwitch });
+        setSession({ viewerId: s.viewer.id, canSwitch: s.canSwitch, canReset: !!m.canReset });
         setPeople(m.people);
         setTeams(m.teams);
         setClients(m.clients ?? []);
@@ -112,6 +114,7 @@ function SignedIn({ children }: { children: React.ReactNode }) {
     return {
       viewerId: session.viewerId,
       canSwitch: session.canSwitch,
+      canReset: session.canReset,
       setViewerId,
       people,
       teams,

@@ -23,7 +23,8 @@ export const GET = handle(async (req) => {
  */
 export const POST = handle(async (req) => {
   const viewer = await requireViewer(req);
-  const body = await readBody(req, conversationImport);
+  // An .eml can be up to 5 million characters, and JSON escapes its line breaks.
+  const body = await readBody(req, conversationImport, 12_000_000);
   const world = await loadWorld();
   const now = new Date().toISOString();
   const me = { authorName: viewer.name, authorEmail: viewer.email, sentAt: now };

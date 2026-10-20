@@ -3,8 +3,9 @@ import { requireViewer } from "@/lib/auth";
 import { createDocument, loadWorld, markAnswersInFaq, recordOverrides } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { notifyOverrides } from "@/lib/notify";
+import { limitWrites } from "@/lib/rateLimit";
 import { newDocument } from "@/lib/schemas";
-import { checkAppliesTo, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
+import { checkAppliesTo, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
 
 export const GET = handle(async (req) => Response.json(await listDocs(await requireViewer(req))));
 
@@ -15,12 +16,14 @@ export const GET = handle(async (req) => Response.json(await listDocs(await requ
  */
 export const POST = handle(async (req) => {
   const viewer = await requireViewer(req);
+  limitWrites(viewer.id);
   const body = await readBody(req, newDocument);
   const world = await loadWorld();
   const title = body.title?.trim() ?? "";
   if (!title) throw new HttpError(400, "Give the document a name.");
   const scope = checkAppliesTo(world, body.locations, body.audienceTeamIds);
   // An upload is tagged when it's added; a blank document when it's first saved.
+  checkTags(world, body.tags);
   requireTags(world, body.content, body.tags);
   const locations = scope.locations ?? [viewer.location];
   const audienceTeamIds = scope.audienceTeamIds ?? [];
@@ -39,7 +42,7 @@ export const POST = handle(async (req) => {
   const now = new Date().toISOString();
   const id = `doc-${crypto.randomUUID()}`;
   await createDocument(
-    { id, title, kind: body.kind, content: body.content, ownerId: viewer.id, locations, audienceTeamIds, status: body.status ?? "WIP", teamId, tags: body.tags, createdAt: now, updatedAt: now, lastEditedById: viewer.id, clientId, folderId, confidential: body.confidential },
+    { id, title, kind: body.kind, content: body.content, ownerId: viewer.id, locations, audienceTeamIds, status: body.status ?? "WIP", teamId, tags: [...new Set(body.tags)], createdAt: now, updatedAt: now, lastEditedById: viewer.id, clientId, folderId, confidential: body.confidential },
     body.sourceConversationIds,
   );
   // Written up: these answers stop counting towards an FAQ suggestion, and point to the document.

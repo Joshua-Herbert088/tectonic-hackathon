@@ -38,7 +38,7 @@ function Nav({ compact }: { compact: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const { clients, myClients } = useApp();
+  const { clients, myClients, canReset } = useApp();
   const [choosing, setChoosing] = useState(false);
   const [menu, setMenu] = useState(false);
   useEscape(menu, () => setMenu(false));
@@ -162,16 +162,19 @@ function Nav({ compact }: { compact: boolean }) {
       {!compact && (
         <div className={`mt-auto hidden px-4 pt-6 text-[11px] leading-4 text-slate-500 lg:block`}>
           Trust scores by <span className="font-medium">Jev</span> (TypeSafe AI).
-          <button
-            className="mt-2 block text-blue-700 hover:underline"
-            onClick={async () => {
-              if (!confirm("Reset all demo data? Your edits and verifications will be lost.")) return;
-              await fetch("/api/reset", { method: "POST" });
-              location.reload();
-            }}
-          >
-            Reset demo data
-          </button>
+          {canReset && (
+            <button
+              className="mt-2 block text-blue-700 hover:underline"
+              onClick={async () => {
+                if (!confirm("Reset all demo data? Your edits and verifications will be lost.")) return;
+                const r = await fetch("/api/reset", { method: "POST" });
+                if (!r.ok) return alert((await r.json().catch(() => null))?.error ?? "Could not reset the demo data.");
+                location.reload();
+              }}
+            >
+              Reset demo data
+            </button>
+          )}
         </div>
       )}
     </aside>

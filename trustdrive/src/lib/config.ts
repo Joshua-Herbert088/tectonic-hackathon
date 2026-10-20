@@ -25,6 +25,8 @@ const env = z
     JEV_API_KEY: z.string().optional(),
     JEV_API_URL: z.string().url().default("https://jevtypesafeai.com/api/v1/decide"),
     JEV_DISABLED: flag(false),
+    /** "Reset demo data" wipes the database. Allowed by default except in production, and never without demo data. */
+    ALLOW_DEMO_RESET: z.enum(["1", "0", "true", "false", ""]).optional(),
     /** What people enter to sign in. Without it nobody can: every page and API answers 503. */
     TRUSTDRIVE_ACCESS_CODE: z.union([z.literal(""), z.string().min(8, "must be at least 8 characters")]).optional(),
   });
@@ -44,6 +46,7 @@ function load() {
     seedDemoData: e.SEED_DEMO_DATA,
     jev: { apiKey: e.JEV_API_KEY, url: e.JEV_API_URL, disabled: e.JEV_DISABLED },
     accessCode: e.TRUSTDRIVE_ACCESS_CODE || undefined,
+    allowDemoReset: e.SEED_DEMO_DATA && (e.ALLOW_DEMO_RESET ? e.ALLOW_DEMO_RESET === "1" || e.ALLOW_DEMO_RESET === "true" : e.NODE_ENV !== "production"),
   };
 }
 

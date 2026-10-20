@@ -28,11 +28,34 @@ export function handle<Args extends unknown[]>(fn: (req: Request, ...args: Args)
   };
 }
 
-/** The JSON body, validated. Malformed JSON is a 400, not a crash. */
-export async function readBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
+/** Request bodies larger than this are refused before they're read in full. */
+export const MAX_BODY_BYTES = 2_000_000;
+
+/**
+ * The JSON body, validated. Malformed JSON is a 400, not a crash; a body over `maxBytes` is a 413,
+ * found while reading, so an oversized request is never buffered whole.
+ */
+export async function readBody<T extends z.ZodType>(req: Request, schema: T, maxBytes = MAX_BODY_BYTES): Promise<z.infer<T>> {
+  const tooLarge = () => new HttpError(413, `The request is too large (over ${Math.round(maxBytes / 1_000_000)} MB).`);
+  if (Number(req.headers.get("content-length")) > maxBytes) throw tooLarge();
+  let text = "";
+  if (req.body) {
+    const reader = req.body.getReader();
+    const decoder = new TextDecoder();
+    let size = 0;
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw tooLarge();
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  }
   let raw: unknown;
   try {
-    raw = await req.json();
+    raw = JSON.parse(text);
   } catch {
     throw new HttpError(400, "Request body must be JSON");
   }

@@ -75,6 +75,8 @@ export function Markdown({
         i++;
       }
       const [head, ...body] = rows;
+      // Only separator lines (|---|): nothing to show.
+      if (!head) continue;
       const rowClass = (no: number) => {
         const m = mark(no);
         return m ? `cursor-pointer ${no === activeLine ? MARK[m.tone].active : MARK[m.tone].text}` : "";
