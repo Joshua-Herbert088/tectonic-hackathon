@@ -29,6 +29,10 @@ export const people = pgTable(
     clientIds: jsonb("client_ids").$type<string[]>(),
     /** Topics and clients ("topic:salary", "client:noordkaai") the person took off their own expertise profile. */
     hiddenExpertise: jsonb("hidden_expertise").$type<string[]>(),
+    /** The colleague who mentors this person (buddy system). They can see what this person asks, searches and opens. */
+    mentorId: text("mentor_id").references((): AnyPgColumn => people.id),
+    /** Since when: activity is only recorded, and shown to the mentor, from then on. */
+    mentorSince: text("mentor_since"),
   },
   // People are looked up by email.
   (t) => [uniqueIndex("people_email_idx").on(t.email)],
@@ -129,6 +133,26 @@ export const views = pgTable(
     at: text("at").notNull(),
   },
   (t) => [index("views_doc_idx").on(t.docId)],
+);
+
+/**
+ * What a mentee asked, searched for and opened, for their mentor (see mentoring.ts). Only recorded for
+ * people who have a mentor. Separate from `views`, which Jev reads: recording these never changes a score.
+ */
+export const activity = pgTable(
+  "activity",
+  {
+    id: serial("id").primaryKey(),
+    personId: text("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+    /** ask: a "Who knows…?" question · search: a drive search · open: a document opened */
+    kind: text("kind").$type<"ask" | "search" | "open">().notNull(),
+    at: text("at").notNull(),
+    query: text("query"),
+    docId: text("doc_id").references(() => documents.id, { onDelete: "cascade" }),
+    /** For searches: how many documents matched. */
+    results: integer("results"),
+  },
+  (t) => [index("activity_person_idx").on(t.personId, t.at)],
 );
 
 /** Snapshot of the document after every edit (title/content/metadata). */

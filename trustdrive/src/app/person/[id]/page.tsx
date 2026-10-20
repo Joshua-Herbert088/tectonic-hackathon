@@ -104,6 +104,7 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
             <p className="mt-4 text-[11px] text-slate-500">
               {own ? "Your profile is built from your work in TrustDrive, so you never have to update it. Take off anything that isn't you any more." : `Built from ${first}'s work in TrustDrive: nobody typed this in. Every line links to where it comes from.`}
             </p>
+            {p.active && <MentorRow personId={p.id} own={own} />}
           </section>
 
           {!p.active && (
@@ -289,6 +290,73 @@ function Stat({ value, label }: { value: number; label: string }) {
     <div className="rounded-xl bg-slate-50 px-3 py-2">
       <div className="text-2xl font-semibold tabular-nums text-slate-800">{value}</div>
       <div className="text-[11px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+/** Who mentors this person (buddy system), with a way to assign, change or remove the mentor. */
+function MentorRow({ personId, own }: { personId: string; own: boolean }) {
+  const { viewerId, people, person, setMentor } = useApp();
+  const p = person(personId)!;
+  const mentor = person(p.mentorId);
+  const first = p.name.split(" ")[0];
+  const [editing, setEditing] = useState(false);
+  const [choice, setChoice] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const candidates = people.filter((x) => x.active && x.id !== p.id && x.mentorId !== p.id).sort((a, b) => a.name.localeCompare(b.name));
+
+  const save = async (mentorId: string | null) => {
+    setError(null);
+    try {
+      await setMentor(p.id, mentorId);
+      setEditing(false);
+      setChoice("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Mentor</span>
+        {mentor ? (
+          <>
+            <Avatar person={mentor} size={20} />
+            <Link href={`/person/${mentor.id}`} className="text-slate-900 hover:underline">{mentor.id === viewerId ? "You" : mentor.name}</Link>
+            {p.mentorSince && <span className="text-[11px] text-slate-500">since {timeAgo(p.mentorSince)}</span>}
+          </>
+        ) : (
+          <span className="text-slate-500">{own ? "You don't have a mentor." : `${first} doesn't have a mentor.`}</span>
+        )}
+        {!editing && (
+          <button onClick={() => setEditing(true)} className="text-xs font-medium text-blue-700 hover:underline">{mentor ? "Change" : "Assign a mentor"}</button>
+        )}
+        {!editing && mentor && (
+          <button onClick={() => save(null)} className="text-xs font-medium text-slate-600 hover:underline">Remove</button>
+        )}
+        {!editing && p.mentorId === viewerId && (
+          <Link href={`/mentoring?p=${p.id}`} className="ml-auto text-xs font-medium text-blue-700 hover:underline">See what {first} has been asking and reading →</Link>
+        )}
+      </div>
+      {editing && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <select value={choice} onChange={(e) => setChoice(e.target.value)} className="rounded border border-slate-300 px-2 py-1 text-sm" aria-label="Mentor">
+            <option value="">Choose a colleague…</option>
+            {candidates.map((x) => (
+              <option key={x.id} value={x.id}>{x.id === viewerId ? `Me (${x.name})` : x.name} – {x.role}</option>
+            ))}
+          </select>
+          <button onClick={() => save(choice)} disabled={!choice} className="rounded-full bg-[#0b57d0] px-3 py-1 text-xs font-medium text-white disabled:opacity-50">Save</button>
+          <button onClick={() => setEditing(false)} className="text-xs text-slate-600 hover:underline">Cancel</button>
+        </div>
+      )}
+      {error && <div className="mt-1 text-xs text-red-700">{error}</div>}
+      <p className="mt-1 text-[11px] text-slate-500">
+        {mentor
+          ? `${mentor.id === viewerId ? "You" : mentor.name.split(" ")[0]} can see the questions ${own ? "you ask" : `${first} asks`} in Who knows…?, drive searches, the documents ${own ? "you open" : `${first} opens`} and questions to colleagues – from the day the mentorship started. Nobody is notified.`
+          : `A mentor can see what ${own ? "you ask" : `${first} asks`}, ${own ? "search for and open" : "searches for and opens"} from then on, to check in where it's needed. Nobody is notified.`}
+      </p>
     </div>
   );
 }

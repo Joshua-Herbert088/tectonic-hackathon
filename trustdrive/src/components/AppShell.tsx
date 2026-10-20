@@ -133,6 +133,7 @@ function Nav({ compact }: { compact: boolean }) {
         {item("/drive?view=attention", "Needs attention", "warning")}
         {item("/drive?view=radar", "Handover radar", "handover")}
         {item("/people", "Who knows", "person")}
+        {item("/mentoring", "Mentoring", "mentor")}
         {item("/conversations", "Conversations", "chat")}
         {item("/company", "Company & tags", "tag")}
       </nav>

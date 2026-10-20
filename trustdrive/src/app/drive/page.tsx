@@ -157,6 +157,17 @@ function Drive() {
       .sort((a, b) => (sort === "trust" ? (trustOf(b)?.score ?? -1) - (trustOf(a)?.score ?? -1) : b.updatedAt.localeCompare(a.updatedAt)));
   }, [docs, view, matches, sort, viewerId, trustOf, browsing, folderId, scope]);
 
+  // A search, once typing pauses, for the viewer's mentor (kept only if they have one).
+  const searched = search.trim();
+  const found = docs ? shown.length : null;
+  useEffect(() => {
+    if (searched.length < 3 || found === null) return;
+    const t = setTimeout(() => {
+      fetch("/api/activity", { method: "POST", body: JSON.stringify({ kind: "search", query: searched, results: found }) }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [searched, found]);
+
   const subfolders = useMemo(() => (browsing ? childFolders(folders, folderId) : []), [browsing, folders, folderId]);
   /** Per folder: how many documents it holds (subfolders included), the newest change, and how many score below 50. */
   const folderStats = useCallback(

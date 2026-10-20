@@ -5,7 +5,8 @@ import { buildGovernanceSnapshot } from "./governance";
 import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions } from "./answers";
-import { dismissFaq, documentSources, insertScore, latestScore, latestScoresForViewer, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { dismissFaq, documentSources, insertScore, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
 import { GLOBAL, taxonomyOf } from "./taxonomy";
@@ -129,6 +130,47 @@ async function expertiseInputs() {
   await captureAnswers();
   const [db, history, conversations, answers] = await Promise.all([loadWorld(), loadHistory(), loadConversations(), loadAnswers()]);
   return { db, conversations, answers, ledger: buildLedger(db, history, conversations, answers) };
+}
+
+/**
+ * A mentee as their mentor sees them: what they asked, searched for and opened since the mentorship
+ * started, by department. Trust is the mentee's own (stored, or the rule estimate when they haven't
+ * been scored yet), so "low trust" means what they could rely on.
+ */
+export async function menteeFor(db: Db, mentee: Person, conversations: Conversation[]) {
+  const since = mentee.mentorSince ?? new Date(0).toISOString();
+  const [events, scores] = await Promise.all([loadActivity(mentee.id, since), latestScoresForViewer(mentee.id)]);
+  const scoreOf = (docId: string) => {
+    const doc = db.docs.find((d) => d.id === docId);
+    if (!doc) return undefined;
+    return scores.get(docId)?.score ?? fallbackScore(db, doc, mentee, "estimate for the mentor").score;
+  };
+  return menteeView(db, mentee, events, conversations, scoreOf, since);
+}
+
+/** The viewer's mentees (each with what stands out) and their own mentor. */
+export async function mentoringFor(viewer: Person) {
+  const [db, conversations] = await Promise.all([loadWorld(), loadConversations()]);
+  const me = db.people.find((p) => p.id === viewer.id) ?? viewer;
+  const mentees = db.people.filter((p) => p.mentorId === viewer.id && p.active);
+  return {
+    mentor: me.mentorId ? { personId: me.mentorId, since: me.mentorSince ?? null } : null,
+    mentees: await Promise.all(
+      mentees.map(async (p) => {
+        const view = await menteeFor(db, p, conversations);
+        return { personId: p.id, since: view.since, counts: view.counts, struggling: view.areas.filter((a) => a.struggling).map((a) => ({ teamId: a.teamId!, reasons: a.reasons })), lastAt: view.areas.map((a) => a.lastAt).sort().at(-1) ?? null };
+      }),
+    ),
+  };
+}
+
+/** Everything about one mentee, for their mentor only. */
+export async function menteeDetail(menteeId: string, viewer: Person) {
+  const [db, conversations] = await Promise.all([loadWorld(), loadConversations()]);
+  const mentee = db.people.find((p) => p.id === menteeId);
+  if (!mentee) throw new HttpError(404, "Not found");
+  if (mentee.mentorId !== viewer.id) throw new HttpError(403, `Only ${mentee.name.split(" ")[0]}'s mentor can see this.`);
+  return { personId: mentee.id, ...(await menteeFor(db, mentee, conversations)) };
 }
 
 /** "Who knows X?": colleagues ranked by the evidence on what the question is about, and answers given before. An empty question gets starting points. */

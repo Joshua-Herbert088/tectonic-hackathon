@@ -11,10 +11,10 @@ import { Pool } from "pg";
 import * as schema from "@/db/schema";
 import { config } from "./config";
 import { log } from "./log";
-import { buildConversations, buildSeed, seedHistory } from "./seed";
+import { buildConversations, buildSeed, seedActivity, seedHistory } from "./seed";
 import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
 import { formatLocations } from "./appliesTo";
-import type { Answer, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
+import type { ActivityEvent, Answer, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
 
 /**
  * Database access. Postgres everywhere: any Postgres server when DATABASE_URL is set, otherwise
@@ -165,6 +165,10 @@ async function syncSeed(orm: Orm) {
     const newDocs = new Set(docs.map((d) => d.id));
     const overrides = seed.overrides.filter((o) => newDocs.has(o.docId)).map(({ id: _id, ...o }) => o);
     if (overrides.length) await tx.insert(schema.conflictOverrides).values(overrides);
+    // The demo mentee's recent questions and reading, added with the person.
+    const newPeople = new Set(people.map((p) => p.id));
+    const activity = seedActivity().filter((a) => newPeople.has(a.personId) && (!a.docId || newDocs.has(a.docId)));
+    if (activity.length) await tx.insert(schema.activity).values(activity);
   });
   log.info("demo data added", { teams: teams.length, people: people.length, clients: clients.length, docs: docs.length, conversations: conversations.length, folders: folders.length, terms: terms.length });
 }
@@ -173,7 +177,7 @@ async function syncSeed(orm: Orm) {
 export async function resetDb() {
   const orm = await db();
   await orm.transaction(async (tx) => {
-    for (const t of [schema.notifications, schema.answers, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+    for (const t of [schema.activity, schema.notifications, schema.answers, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
       await tx.delete(t);
     }
   });
@@ -229,6 +233,8 @@ export async function loadWorld(): Promise<Db> {
     phone: p.phone ?? undefined,
     clientIds: p.clientIds ?? undefined,
     hiddenExpertise: p.hiddenExpertise ?? undefined,
+    mentorId: p.mentorId ?? undefined,
+    mentorSince: p.mentorSince ?? undefined,
   }));
   const clients = clientRows.map((c) => ({ ...c, domain: c.domain ?? undefined }));
   return { teams, people, docs, overrides, clients, folders: folderRows.map(toFolder), terms };
@@ -345,6 +351,64 @@ export async function deleteDocumentForever(docId: string) {
 /** The clients a person chose to see; null goes back to their team's clients. */
 export async function setPersonClients(personId: string, clientIds: string[] | null) {
   await (await db()).update(schema.people).set({ clientIds }).where(eq(schema.people.id, personId));
+}
+
+/**
+ * Makes `mentorId` the person's mentor, or removes their mentor (null). A new mentor only sees what
+ * happens from now on, so `mentorSince` restarts; assigning the same mentor again changes nothing.
+ */
+export async function setMentor(personId: string, mentorId: string | null) {
+  const orm = await db();
+  const [p] = await orm.select({ mentorId: schema.people.mentorId }).from(schema.people).where(eq(schema.people.id, personId));
+  if (!p || (p.mentorId ?? null) === mentorId) return;
+  await orm.update(schema.people).set({ mentorId, mentorSince: mentorId ? new Date().toISOString() : null }).where(eq(schema.people.id, personId));
+}
+
+/** Repeats within this window are one event: reopening a document, or asking the same thing again. */
+const ACTIVITY_DEDUPE_MS = 10 * 60_000;
+/** A search typed further within this window replaces the shorter one ("leg" → "legal" → "legal hold"). */
+const SEARCH_REFINE_MS = 2 * 60_000;
+
+/**
+ * Records what someone asked, searched for or opened – only while they have a mentor, who is the only
+ * one shown it. Returns whether anything was stored.
+ */
+export async function recordActivity(personId: string, ev: { kind: ActivityEvent["kind"]; query?: string; docId?: string; results?: number }, now = Date.now()) {
+  const orm = await db();
+  const [p] = await orm.select({ mentorId: schema.people.mentorId }).from(schema.people).where(eq(schema.people.id, personId));
+  if (!p?.mentorId) return false;
+  const query = ev.query?.trim().slice(0, 300) || null;
+  const [last] = await orm
+    .select()
+    .from(schema.activity)
+    .where(and(eq(schema.activity.personId, personId), eq(schema.activity.kind, ev.kind)))
+    .orderBy(desc(schema.activity.at), desc(schema.activity.id))
+    .limit(1);
+  const age = last ? now - Date.parse(last.at) : Infinity;
+  const at = new Date(now).toISOString();
+  if (ev.kind === "open" && last?.docId === ev.docId && age < ACTIVITY_DEDUPE_MS) return false;
+  if (ev.kind === "ask" && last && fold(last.query) === fold(query) && age < ACTIVITY_DEDUPE_MS) return false;
+  if (ev.kind === "search" && last && query && age < SEARCH_REFINE_MS) {
+    const [a, b] = [fold(last.query), fold(query)];
+    if (a === b || b.startsWith(a) || a.startsWith(b)) {
+      await orm.update(schema.activity).set({ query, results: ev.results ?? null, at }).where(eq(schema.activity.id, last.id));
+      return true;
+    }
+  }
+  await orm.insert(schema.activity).values({ personId, kind: ev.kind, at, query, docId: ev.docId ?? null, results: ev.results ?? null });
+  return true;
+}
+const fold = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+
+/** Someone's recorded activity since a moment, newest first. */
+export async function loadActivity(personId: string, since: string, limit = 500): Promise<ActivityEvent[]> {
+  const rows = await (await db())
+    .select()
+    .from(schema.activity)
+    .where(and(eq(schema.activity.personId, personId), sql`${schema.activity.at} >= ${since}`))
+    .orderBy(desc(schema.activity.at), desc(schema.activity.id))
+    .limit(limit);
+  return rows.map((r) => ({ id: r.id, kind: r.kind, at: r.at, query: r.query ?? undefined, docId: r.docId ?? undefined, results: r.results ?? undefined }));
 }
 
 /** The topics and clients a person took off their expertise profile; an empty list shows everything again. */
@@ -646,7 +710,7 @@ export async function documentSources(docId: string) {
 export async function findPerson(by: { id: string } | { email: string }) {
   const where = "id" in by ? eq(schema.people.id, by.id) : sql`lower(${schema.people.email}) = ${by.email.toLowerCase()}`;
   const [p] = await (await db()).select().from(schema.people).where(where).limit(1);
-  return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined, hiddenExpertise: p.hiddenExpertise ?? undefined } : null;
+  return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined, hiddenExpertise: p.hiddenExpertise ?? undefined, mentorId: p.mentorId ?? undefined, mentorSince: p.mentorSince ?? undefined } : null;
 }
 
 /** Liveness of the database, for the health check. */

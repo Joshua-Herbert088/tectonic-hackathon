@@ -101,6 +101,17 @@ When a colleague asks something by email or Teams and someone answers, the excha
 
 In the demo, Jonas, Sofie and Karim asked Lotte about Belgian overtime. One answer ("max 120 hours per calendar year now") contradicts the outdated overtime policy, whose owner Marc moved team. So Lotte now comes first for *overtime in Belgium*, Marc is told his policy may be out of date, and Lotte is offered an overtime FAQ. One chat is private and one is about a named colleague's salary; neither is kept.
 
+### Mentoring (buddy system)
+A newcomer gets a mentor, who can quietly keep an eye on where they're getting stuck and step in: *Jonas keeps asking about GDPR and his searches find nothing, so let's sit down about how Legal works.* Nobody is notified; the mentor checks in when they choose (`src/lib/mentoring.ts`, `src/app/mentoring/`).
+- **Assigning a mentor:** on anyone's profile (**Mentor → Assign a mentor / Change / Remove**), or on **Mentoring** (sidebar) with **Mentor someone**. Someone can't mentor themselves, mentor someone who mentors them, or be mentored by someone who left.
+- **What the mentor sees**, for each mentee, from the day the mentorship started (and only while it lasts):
+  - **What they asked:** questions in **Who knows…?**, and questions they wrote to colleagues by email or Teams (client conversations aren't included).
+  - **What they searched for** in the drive, with how many documents matched; searches that found nothing stand out.
+  - **What they looked at:** the documents they opened, how often, and the mentee's own trust score for each, so the mentor can tell when they were reading something they can't rely on.
+- **Where to step in:** all of it grouped by the department it's about: the team that maintains the documents, or the team whose topics or clients a question names (or whose words it uses; a question to someone in another department counts for that department). A department is highlighted as *may be struggling* when it keeps coming back: several questions or searches that found nothing, documents opened three times or more, or documents that score below 50 for them. It then suggests trusted documents in that area they haven't opened yet, and a **Who knows…?** link for its main topic to find someone to bring in.
+- **Transparent to the mentee:** the mentee sees who their mentor is and exactly what that mentor can see, on **Mentoring** and on their profile. Activity is only recorded for people who have a mentor, and only their mentor can open it (anyone else gets a 403). It's kept apart from the views Jev reads, so it never changes a trust score.
+- In the demo, Lotte Peeters mentors Jonas Maes: switch **Viewing as** to Lotte and open **Mentoring**.
+
 ### Notifications
 The bell in the top bar notifies people when their information changes (`src/lib/notify.ts`):
 - **Line authors** hear when lines they wrote are changed or removed, with before/after.
@@ -280,6 +291,7 @@ trustdrive/
   src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no, or the rules without Jev)
   src/lib/conflict-cases.ts  hand-labelled conflict pairs used by the tests and the Jev eval
   src/lib/briefing.ts      handover briefing
+  src/lib/mentoring.ts     mentoring: a mentee's questions, searches and reading by department, and where they struggle
   src/app/client/[id]/     client overview (service: clientOverview in src/lib/service.ts)
   src/lib/taxonomy.ts      default topics, document types and countries (with multilingual keywords), validation, required tags
   src/lib/tagging.ts       tag suggestions (Jev choice questions, or rules) · tagEval.ts measures them

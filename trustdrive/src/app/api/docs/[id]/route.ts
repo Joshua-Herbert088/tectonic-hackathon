@@ -1,6 +1,7 @@
 import { requireViewer } from "@/lib/auth";
-import { deleteDocumentForever, loadTrash, loadWorld, recordOverrides, updateDocument } from "@/lib/db";
+import { deleteDocumentForever, loadTrash, loadWorld, recordActivity, recordOverrides, updateDocument } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
+import { log } from "@/lib/log";
 import { notifyEdit, notifyOverrides } from "@/lib/notify";
 import { documentPatch } from "@/lib/schemas";
 import { checkAppliesTo, docDetail, gateDraft, redundancyCheck, requireTags } from "@/lib/service";
@@ -9,8 +10,12 @@ import { substance } from "@/lib/similarity";
 type Ctx = RouteContext<"/api/docs/[id]">;
 
 export const GET = handle(async (req, ctx: Ctx) => {
-  const detail = await docDetail((await ctx.params).id, await requireViewer(req));
+  const id = (await ctx.params).id;
+  const viewer = await requireViewer(req);
+  const detail = await docDetail(id, viewer);
   if (!detail) throw new HttpError(404, "Not found");
+  // For the viewer's mentor, if they have one. Not a view: Jev never sees it, so no rescore.
+  await recordActivity(viewer.id, { kind: "open", docId: id }).catch((e: Error) => log.warn("could not record activity", { error: e.message }));
   return Response.json(detail);
 });
 

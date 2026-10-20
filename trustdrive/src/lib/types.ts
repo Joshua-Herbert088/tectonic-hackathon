@@ -24,12 +24,26 @@ export interface Person {
   clientIds?: string[];
   /** Topics and clients they took off their expertise profile ("topic:salary", "client:noordkaai"). */
   hiddenExpertise?: string[];
+  /** Their mentor (buddy), who can see what they ask, search and open since `mentorSince`. */
+  mentorId?: string;
+  mentorSince?: string;
   /** Set when the person moved to a different team; teamId is the current one. */
   previousTeamId?: string;
   movedTeamAt?: string;
   color: string;
   email?: string;
   phone?: string;
+}
+
+/** Something a mentee asked, searched for or opened, recorded for their mentor. */
+export interface ActivityEvent {
+  id: number;
+  kind: "ask" | "search" | "open";
+  at: string;
+  query?: string;
+  docId?: string;
+  /** For searches: how many documents matched. */
+  results?: number;
 }
 
 export interface Client {

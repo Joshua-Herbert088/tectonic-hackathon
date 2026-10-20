@@ -34,6 +34,8 @@ interface Ctx {
   choseClients: boolean;
   /** Saves which clients the viewer sees; null goes back to their team's clients. */
   setMyClients: (clientIds: string[] | null) => Promise<void>;
+  /** Makes `mentorId` someone's mentor, or removes their mentor (null). Throws with a message the UI can show. */
+  setMentor: (personId: string, mentorId: string | null) => Promise<void>;
 }
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -79,6 +81,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [session],
   );
 
+  const setMentor = useCallback(async (personId: string, mentorId: string | null) => {
+    const r = await fetch(`/api/people/${personId}/mentor`, { method: "PUT", body: JSON.stringify({ mentorId }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error ?? "Could not change the mentor.");
+    setPeople((ps) => ps.map((p) => (p.id === personId ? { ...p, mentorId: j.mentorId ?? undefined, mentorSince: j.mentorSince ?? undefined } : p)));
+  }, []);
+
   const setViewerId = useCallback(async (id: string) => {
     const r = await fetch("/api/session", { method: "POST", body: JSON.stringify({ viewerId: id }) });
     if (r.ok) setSession((s) => s && { ...s, viewerId: id });
@@ -106,8 +115,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       myClients: myClients(viewer, clients),
       choseClients: !!viewer?.clientIds,
       setMyClients,
+      setMentor,
     };
-  }, [session, setViewerId, setMyClients, people, teams, clients, search, taxonomy, teamCountry]);
+  }, [session, setViewerId, setMyClients, setMentor, people, teams, clients, search, taxonomy, teamCountry]);
 
   if (!value) {
     return (

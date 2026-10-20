@@ -33,7 +33,7 @@ export function buildSeed(now = Date.now()): Db {
 
   const people: Person[] = withContactDetails([
     { id: "lotte", name: "Lotte Peeters", role: "Senior Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(2400), color: "#1a73e8" },
-    { id: "jonas", name: "Jonas Maes", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(120), color: "#e8710a" },
+    { id: "jonas", name: "Jonas Maes", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(120), color: "#e8710a", mentorId: "lotte", mentorSince: ago(30) },
     { id: "an", name: "An Claes", role: "Payroll Team Lead", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(3100), color: "#188038" },
     { id: "pieter", name: "Pieter Wouters", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: false, joinedAt: ago(2900), leftAt: ago(740), color: "#9334e6" },
     { id: "sanne", name: "Sanne de Vries", role: "Payroll Specialist", teamId: "pay-nl", location: "Netherlands", active: true, joinedAt: ago(1500), color: "#d01884" },
@@ -1427,6 +1427,38 @@ export function seedHistory(doc: Doc): { personId: string | null; at: string; co
  * The demo mailbox and Teams workspace: client conversations where knowledge lives that never made it
  * into a document. Message ids are assigned by the database.
  */
+/**
+ * The demo mentee's last weeks: Jonas (mentored by Lotte) is at home in Belgian payroll but keeps
+ * circling the legal side – retention, subject access requests – so his mentor can see where to step in.
+ */
+export function seedActivity(now = Date.now()) {
+  const at = (days: number, hours = 0) => new Date(now - days * DAY - hours * HOUR).toISOString();
+  const ask = (days: number, hours: number, query: string) => ({ personId: "jonas", kind: "ask" as const, at: at(days, hours), query, docId: null, results: null });
+  const search = (days: number, hours: number, query: string, results: number) => ({ personId: "jonas", kind: "search" as const, at: at(days, hours), query, docId: null, results });
+  const open = (days: number, hours: number, docId: string) => ({ personId: "jonas", kind: "open" as const, at: at(days, hours), query: null, docId, results: null });
+  return [
+    open(24, 5, "onboarding-consultant-be"),
+    open(23, 3, "payroll-calendar-2027-be"),
+    open(21, 6, "overtime-be"),
+    search(18, 2, "payslip retention", 0),
+    open(18, 2, "gdpr-retention"),
+    ask(17, 4, "Who knows how long we must keep payslips?"),
+    open(16, 1, "gdpr-retention"),
+    open(14, 3, "sick-leave-be"),
+    search(12, 5, "access request employee", 0),
+    ask(12, 5, "Who knows about subject access requests?"),
+    open(12, 4, "sar-procedure"),
+    open(9, 2, "gdpr-retention"),
+    open(8, 6, "sar-procedure"),
+    open(7, 1, "company-car-be"),
+    search(5, 3, "delete former employee data", 0),
+    open(5, 3, "gdpr-retention"),
+    open(4, 2, "input-deadlines"),
+    ask(2, 6, "Who knows the GDPR rules for ex-employees?"),
+    open(2, 5, "sar-procedure"),
+  ];
+}
+
 export function buildConversations(now = Date.now()): (Omit<Conversation, "messages"> & { messages: Omit<Conversation["messages"][number], "id">[] })[] {
   // Everyone who wrote is on the thread; `to` adds recipients who haven't answered (yet).
   const withParticipants = (cs: (Omit<Conversation, "messages" | "participants"> & { messages: Omit<Conversation["messages"][number], "id">[]; to?: Participant[] })[]) =>

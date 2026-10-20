@@ -38,6 +38,11 @@ function WhoKnowsView() {
   const [error, setError] = useState<string | null>(null);
   const key = `${viewerId}:${q}`;
 
+  // The question, for the viewer's mentor (kept only if they have one).
+  useEffect(() => {
+    if (q.trim()) fetch("/api/activity", { method: "POST", body: JSON.stringify({ kind: "ask", query: q.trim() }) }).catch(() => {});
+  }, [q]);
+
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/people?q=${encodeURIComponent(q)}`)
