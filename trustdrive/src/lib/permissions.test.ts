@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { closeDb, loadWorld, migrateAndSeed } from "./db";
 import { handoverFor } from "./handover";
-import { checkTags, editDocument, maintains, mayReassign } from "./service";
+import { checkScope, checkTags, editDocument, maintains, mayReassign } from "./service";
 import type { Db, Doc, Person } from "./types";
 
 // A throwaway in-memory Postgres (PGLITE_DIR=memory:// in vitest.config.ts), migrated and seeded.
@@ -39,6 +39,22 @@ describe("document text", () => {
     expect((await loadWorld()).docs.find((d) => d.id === doc.id)!.collaboratorIds).not.toContain(outsider.id);
     const teammate = world.people.find((p) => p.active && p.teamId === doc.teamId && !maintains(doc, p))!;
     await expect(editDocument(teammate, doc.id, { content: `${doc.content}\n\nA teammate's note.`, acknowledgeSimilar: true })).resolves.toMatchObject({ status: 200 });
+  });
+});
+
+describe("scope", () => {
+  test("a document is linked only to a client you work with", async () => {
+    const jonas = world.people.find((p) => p.id === "jonas")!;
+    const theirs = world.clients.find((c) => c.teamId !== jonas.teamId)!;
+    const ours = world.clients.find((c) => c.teamId === jonas.teamId)!;
+    expect(() => checkScope(world, jonas, { clientId: theirs.id })).toThrow(expect.objectContaining({ status: 403 }));
+    expect(() => checkScope(world, jonas, { clientId: ours.id })).not.toThrow();
+    expect(() => checkScope(world, jonas, { clientId: null })).not.toThrow();
+    // A client the document already has may stay when someone else saves it.
+    expect(() => checkScope(world, jonas, { clientId: theirs.id }, { clientId: theirs.id })).not.toThrow();
+    // Through editing: the owner of a document can't link it to another team's client either.
+    const owned = world.docs.find((d) => d.ownerId === "jonas" && !d.clientId)!;
+    await expect(editDocument(jonas, owned.id, { clientId: theirs.id })).rejects.toMatchObject({ status: 403 });
   });
 });
 

@@ -8,7 +8,7 @@ import { log } from "@/lib/log";
 import { notifyOverrides } from "@/lib/notify";
 import { limitWrites, withSaveSlot } from "@/lib/rateLimit";
 import { newDocument } from "@/lib/schemas";
-import { checkAppliesTo, checkStorage, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
+import { checkAppliesTo, checkScope, checkStorage, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
 import type { ConflictCheck, Person } from "@/lib/types";
 
 export const GET = handle(async (req) => Response.json(await listDocs(await requireViewer(req))));
@@ -40,6 +40,7 @@ async function create(viewer: Person, body: z.infer<typeof newDocument>, signedI
   const teamId = viewer.teamId;
   const clientId = world.clients.some((c) => c.id === body.clientId) ? body.clientId : undefined;
   const folderId = world.folders.some((f) => f.id === body.folderId) ? body.folderId : undefined;
+  checkScope(world, viewer, { clientId });
 
   const [gate, similar] = await Promise.all([
     gateDraft(world, { title, content: body.content, locations, teamId, confidential: body.confidential }, body.override, viewer),

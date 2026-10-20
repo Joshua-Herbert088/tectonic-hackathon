@@ -22,7 +22,7 @@ The home page lists what needs the person viewing it: documents they own or work
   - when it was last edited and last verified, and by whom
   - how much it's been used recently
   - whether a newer document replaced it
-  - up to 4 related documents: ones that share tags or title words, apply to a country in common (and not another client), and come from the people accountable for it (the team that maintains it, its owner or a collaborator) or supersede it. Anyone else's upload with copied tags never counts as "a newer version" or "a draft" of it.
+  - up to 4 related documents: ones that share tags or title words, apply to a country in common (and not another client), and come from the people accountable for it (the team that maintains it, its owner or a collaborator) or supersede it. Anyone else's upload with copied tags never counts as "a newer version" or "a draft" of it, whatever countries it claims. A document can only be linked to a client its creator or editor works with.
   - conflicts that were overridden (see below)
   - the reader's role, team and location
 - Results are stored with a fingerprint of the inputs, so a score is only recalculated when something Jev sees has changed. Every result is kept, and the document page shows the score history.

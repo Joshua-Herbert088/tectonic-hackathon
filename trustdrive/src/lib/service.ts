@@ -475,6 +475,18 @@ export function mayReassign(db: Db, doc: Doc, person: Person) {
 }
 
 /**
+ * Which client someone may link a document to: only one they work with (see myClients); a client the
+ * document already has may stay. A client file is what colleagues taking over that client rely on.
+ * Countries (Global included) stay open: what a document claims to cover gives it no say over other
+ * documents' trust, which only their own maintainers have (vouchedFor in trust.ts).
+ */
+export function checkScope(db: Db, viewer: Person, scope: { clientId?: string | null }, existing?: Pick<Doc, "clientId">) {
+  if (scope.clientId && scope.clientId !== existing?.clientId && !myClients(viewer, db.clients).some((c) => c.id === scope.clientId)) {
+    throw new HttpError(403, "You can only link documents to clients you work with. Add the client to your clients first.");
+  }
+}
+
+/**
  * A document needs a document type and a topic as soon as it has content: an upload when it's added, a
  * blank document when it's first saved, and an older untagged document on its next save.
  */
@@ -505,6 +517,7 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
     confidential: body.confidential,
   };
   checkTags(world, patch.tags, doc.tags);
+  checkScope(world, viewer, { clientId: patch.clientId }, doc);
   // The page lets only the owner and collaborators change these; the server holds to that too. Tags are
   // open to anyone while the document is missing required ones, since saving content needs them.
   const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
