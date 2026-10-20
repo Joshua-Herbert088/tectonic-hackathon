@@ -292,7 +292,8 @@ Lines that look doubtful are underlined in the document itself: lines that only 
 cd trustdrive
 npm install
 
-# Settings (the file is git-ignored); at least JEV_API_KEY=jv_live_... for Jev
+# Settings (the file is git-ignored): set TRUSTDRIVE_ACCESS_CODE (what you sign in with),
+# and JEV_API_KEY=jv_live_... for Jev
 cp .env.example .env.local
 
 npm run dev
@@ -314,7 +315,8 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 | `npm run db:studio` | Browse the database in the browser |
 
 - **Reset demo data** (bottom of the sidebar) wipes the database and reloads the demo company.
-- **No sign-in:** **Viewing as** picks who you are. The choice is kept in a cookie and the server decides who's asking: requests can't claim to be someone else.
+- **Sign-in:** everyone signs in with one shared access code (`TRUSTDRIVE_ACCESS_CODE`, at least 8 characters). Without a valid session every page goes to the sign-in page and every API answers 401 (`src/proxy.ts`, and each route checks again); only `/api/health` is open. Without the setting, nobody can sign in. After 20 wrong codes in a minute, sign-in waits for the next minute. Changing the code signs everyone out; **Sign out** is in the user menu.
+- **Viewing as** then picks who you are. The choice is kept in the signed session cookie and the server decides who's asking: requests can't claim to be someone else, and a forged or edited cookie counts as signed out.
 - **No network for Jev?** Add `JEV_DISABLED=1` to `.env.local`. Trust scores, conflict checks, duplicate warnings and doubts then all run on the rule-based fallbacks; the UI labels each result as rule-based. Without the flag, the same fallbacks kick in automatically whenever Jev can't be reached.
 - Demo documents added to `src/lib/seed.ts` later are inserted into existing databases automatically on startup.
 - Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time a user opens the drive, all visible documents are scored, which takes a few seconds.
@@ -326,14 +328,14 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 ```bash
 cd trustdrive
 docker build -t trustdrive .
-docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 trustdrive
+docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 -e TRUSTDRIVE_ACCESS_CODE=choose-a-code trustdrive
 # open http://localhost:8080 · /api/health answers when the database does
 ```
 
 Migrations run on startup; with `MIGRATE_ON_START=false`, run them separately with `node scripts/migrate.mjs` in the same image.
 
 ### Suggested demo
-1. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
+1. Sign in with the access code. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
 2. Open *Overtime policy – Belgium*. Switch to Marc (the owner), click **I confirm this document is correct**, and watch it rescore.
 3. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`. It's blocked because it conflicts with the salary register. Override it with a reason, then switch to An Claes and open the bell.
 4. Upload `samples/multilingual/planning-paie-decembre-fr.md` (French, conflicts with an English deadline sheet) and `samples/multilingual/maladie-salaire-garanti-fr.md` (a French translation of an existing document, so you get the duplicate warning).
@@ -353,7 +355,9 @@ trustdrive/
   src/components/          UI: trust badge, conflict/duplicate dialogs, upload, who-to-contact, bell, radar
   src/db/schema.ts         Drizzle schema (Postgres)
   src/lib/config.ts        environment variables, validated
-  src/lib/auth.ts          who's asking: the Viewing as switcher's cookie
+  src/proxy.ts             sign-in required for every page and API (except /login, /api/health)
+  src/lib/auth.ts          who's asking: the signed session (access code, then Viewing as)
+  src/lib/session.ts       signing and checking the session cookie
   src/lib/http.ts          route wrapper: input validation, error responses, logging
   src/lib/trust.ts         Jev client, trust-score inputs, good/bad signals, related documents
   src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no, or the rules without Jev)
@@ -389,7 +393,7 @@ trustdrive/
 ## Unfinished / known limitations
 
 **Not a real product yet**
-- **No login or permissions.** "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team fields are limited to the owner and collaborators. There's no admin screen: people are added to the `people` table with SQL.
+- **One shared access code, no per-person login or permissions.** Anyone with the code can be anyone: "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team fields are limited to the owner and collaborators. There's no admin screen: people are added to the `people` table with SQL.
 - **No real Google Drive integration.** Documents live in TrustDrive's own Postgres database.
 - **Uploads are text only** (`.md` / `.txt`). No PDF, Word or spreadsheet parsing; "sheet" and "pdf" are only icons.
 - **Missing drive features:** sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.

@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { teamCountries } from "@/lib/appliesTo";
 import { myClients } from "@/lib/clients";
@@ -42,6 +43,13 @@ const AppCtx = createContext<Ctx | null>(null);
 
 /** Loads the session and reference data once; pages render after the server has said who's asking. */
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  // The sign-in page comes before there's a session.
+  if (usePathname() === "/login") return children;
+  return <SignedIn>{children}</SignedIn>;
+}
+
+function SignedIn({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [session, setSession] = useState<{ viewerId: string; canSwitch: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
@@ -55,6 +63,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const json = async (url: string) => {
       const r = await fetch(url);
+      // Signed out (or the session expired) since the page was loaded.
+      if (r.status === 401) {
+        router.replace(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+        return new Promise<never>(() => {});
+      }
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `Request failed (${r.status})`);
       return j;
@@ -68,7 +81,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (m.terms) setTerms(m.terms);
       })
       .catch((e: Error) => setError(e.message));
-  }, []);
+  }, [router]);
 
   const setMyClients = useCallback(
     async (clientIds: string[] | null) => {

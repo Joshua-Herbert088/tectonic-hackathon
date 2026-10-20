@@ -1,7 +1,5 @@
-import { cookies } from "next/headers";
 import { z } from "zod";
-import { requireViewer, VIEWER_COOKIE } from "@/lib/auth";
-import { config } from "@/lib/config";
+import { endSession, requireViewer, startSession } from "@/lib/auth";
 import { findPerson } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 
@@ -11,11 +9,18 @@ export const GET = handle(async (req) => {
   return Response.json({ viewer, canSwitch: true });
 });
 
-/** View the drive as someone else. */
+/** View the drive as someone else. Only once signed in. */
 export const POST = handle(async (req) => {
+  await requireViewer(req);
   const { viewerId } = await readBody(req, z.object({ viewerId: z.string() }));
   const person = await findPerson({ id: viewerId });
   if (!person?.active) throw new HttpError(400, "Unknown or inactive person");
-  (await cookies()).set(VIEWER_COOKIE, person.id, { httpOnly: true, sameSite: "lax", secure: config.production, path: "/", maxAge: 60 * 60 * 24 * 30 });
+  await startSession(person.id);
   return Response.json({ viewer: person });
+});
+
+/** Signs out. */
+export const DELETE = handle(async () => {
+  await endSession();
+  return Response.json({ ok: true });
 });

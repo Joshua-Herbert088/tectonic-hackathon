@@ -25,6 +25,8 @@ const env = z
     JEV_API_KEY: z.string().optional(),
     JEV_API_URL: z.string().url().default("https://jevtypesafeai.com/api/v1/decide"),
     JEV_DISABLED: flag(false),
+    /** What people enter to sign in. Without it nobody can: every page and API answers 503. */
+    TRUSTDRIVE_ACCESS_CODE: z.union([z.literal(""), z.string().min(8, "must be at least 8 characters")]).optional(),
   });
 
 function load() {
@@ -41,6 +43,7 @@ function load() {
     migrateOnStart: e.MIGRATE_ON_START,
     seedDemoData: e.SEED_DEMO_DATA,
     jev: { apiKey: e.JEV_API_KEY, url: e.JEV_API_URL, disabled: e.JEV_DISABLED },
+    accessCode: e.TRUSTDRIVE_ACCESS_CODE || undefined,
   };
 }
 

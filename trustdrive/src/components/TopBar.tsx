@@ -96,6 +96,16 @@ export function TopBar() {
                   </div>
                 </button>
               ))}
+              <div className="my-2 border-t border-slate-200" />
+              <button
+                onClick={async () => {
+                  await fetch("/api/session", { method: "DELETE" });
+                  router.push("/login");
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+              >
+                Sign out
+              </button>
             </div>
           </>
         )}
