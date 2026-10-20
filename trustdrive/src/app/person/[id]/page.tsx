@@ -5,7 +5,8 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
-import { EvidenceList } from "@/components/Expertise";
+import { AnswerCard, EvidenceList } from "@/components/Expertise";
+import { FaqSuggestions } from "@/components/FaqSuggestions";
 import { ConfidentialPill, StatusPill } from "@/components/StatusPill";
 import { Avatar } from "@/components/TopBar";
 import { ContactLinks } from "@/components/WhoToContact";
@@ -76,7 +77,7 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
     );
   }
 
-  const nothing = !data.topics.length && !data.clients.length && !data.inCharge.length;
+  const nothing = !data.topics.length && !data.clients.length && !data.inCharge.length && !data.answers.length;
   return (
     <AppShell>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -93,10 +94,11 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
                 {!own && <ContactLinks person={p} subject="Question" profile={false} className="mt-1" />}
               </div>
             </div>
-            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
               <Stat value={data.stats.documents} label="documents worked on" />
-              <Stat value={data.stats.conversations} label="client conversations" />
+              <Stat value={data.stats.answeredLastYear} label="questions answered in the last year" />
               <Stat value={data.stats.verifiedLastYear} label="verified in the last year" />
+              <Stat value={data.stats.conversations} label="client conversations" />
               <Stat value={data.stats.decisions} label="exceptions explained" />
             </div>
             <p className="mt-4 text-[11px] text-slate-500">
@@ -110,12 +112,13 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
             </section>
           )}
           {error && <section className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</section>}
+          {data.faqs.length > 0 && <FaqSuggestions faqs={data.faqs} onDismissed={() => setReload((n) => n + 1)} />}
           {nothing && <section className="rounded-2xl bg-white p-6 text-sm text-slate-600">{own ? "You haven't" : `${first} hasn't`} written, verified or decided anything in TrustDrive yet.</section>}
 
           {data.topics.length > 0 && (
             <section className="rounded-2xl bg-white p-6">
               <h2 className="text-lg text-slate-900">Knows about</h2>
-              <p className="mb-2 text-[11px] text-slate-500">Topics of the documents {own ? "you" : first} wrote, verified or decided on. Strongest first; open one to see why.</p>
+              <p className="mb-2 text-[11px] text-slate-500">Topics of the documents {own ? "you" : first} wrote, verified or decided on, and of the questions {own ? "you" : first} answered. Strongest first; open one to see why.</p>
               <AreaList areas={data.topics} own={own} busy={busy} onHide={setHidden} />
             </section>
           )}
@@ -161,6 +164,18 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
             )}
           </div>
 
+          {data.answers.length > 0 && (
+            <section className="rounded-2xl bg-white p-6">
+              <h2 className="text-lg text-slate-900">Answered recently</h2>
+              <p className="mb-3 text-[11px] text-slate-500">Questions colleagues asked {own ? "you" : first} in email or Teams, kept so the next person finds the answer.</p>
+              <div className="space-y-3">
+                {data.answers.map((a) => (
+                  <AnswerCard key={a.id} a={a} />
+                ))}
+              </div>
+            </section>
+          )}
+
           {data.decisions.length > 0 && (
             <section className="rounded-2xl bg-white p-6">
               <h2 className="text-lg text-slate-900">Knows why</h2>
@@ -192,7 +207,13 @@ function AreaList({ areas, own, busy, onHide }: { areas: Area[]; own: boolean; b
     <ul className="divide-y divide-slate-100">
       {areas.map((a) => {
         const expanded = open === a.key;
-        const counts = [a.documents && `${a.documents} document${a.documents === 1 ? "" : "s"}`, a.conversations && `${a.conversations} conversation${a.conversations === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+        const counts = [
+          a.documents && `${a.documents} document${a.documents === 1 ? "" : "s"}`,
+          a.answers && `answered ${a.answers} question${a.answers === 1 ? "" : "s"}`,
+          a.conversations && `${a.conversations} conversation${a.conversations === 1 ? "" : "s"}`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
         return (
           <li key={a.key} className={`py-2.5 ${a.hidden ? "opacity-60" : ""}`}>
             <div className="flex items-center gap-3">

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, doublePrecision, index, integer, jsonb, pgTable, primaryKey, serial, text, uniqueIndex, type AnyPgColumn } from "drizzle-orm/pg-core";
-import type { DocStatus, Location, Participant } from "../lib/types";
+import type { AnswerConflict, DocStatus, Location, Participant } from "../lib/types";
 
 // Timestamps are ISO-8601 strings (text): the app compares and sorts them as strings.
 
@@ -208,9 +208,11 @@ export const notifications = pgTable(
     actorId: text("actor_id").notNull().references(() => people.id),
     /**
      * edit: lines you wrote changed · doc_edit: your document changed · override: a save contradicts your
-     * document · message: someone wrote to you (docId/docTitle are then the conversation, reason a preview)
+     * document · message: someone wrote to you (docId/docTitle are then the conversation, reason a preview) ·
+     * answer: an answer in chat contradicts your document (otherDocId/otherDocTitle are the conversation,
+     * reason the question)
      */
-    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message">().notNull(),
+    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message" | "answer">().notNull(),
     /** The document the recipient's information lives in (for messages: the conversation). */
     docId: text("doc_id").notNull(),
     docTitle: text("doc_title").notNull(),
@@ -237,6 +239,10 @@ export const conversations = pgTable(
     createdAt: text("created_at").notNull(),
     /** Everyone on the thread: colleagues (personId) and client contacts (name and address only). */
     participants: jsonb("participants").$type<Participant[]>().notNull().default(sql`'[]'::jsonb`),
+    /** "Don't keep for others": answers in this conversation are never captured. */
+    keepPrivate: boolean("keep_private").notNull().default(false),
+    /** The last message already looked at for questions and answers (see answers.ts). */
+    answersThroughId: integer("answers_through_id"),
   },
   (t) => [index("conversations_client_idx").on(t.clientId)],
 );
@@ -264,4 +270,38 @@ export const documentSources = pgTable(
     conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
   },
   (t) => [primaryKey({ columns: [t.docId, t.conversationId] })],
+);
+
+/**
+ * A question a colleague asked in an internal email or Teams chat, and the answer another colleague gave,
+ * captured so the next person who needs it finds it (and the person who answered gets the credit).
+ */
+export const answers = pgTable(
+  "answers",
+  {
+    id: serial("id").primaryKey(),
+    conversationId: text("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+    questionMessageId: integer("question_message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+    answerMessageId: integer("answer_message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+    askerId: text("asker_id").notNull().references(() => people.id),
+    answererId: text("answerer_id").notNull().references(() => people.id),
+    /** As written, with personal data removed; the answer has one statement per line. */
+    question: text("question").notNull(),
+    answer: text("answer").notNull(),
+    askedAt: text("asked_at").notNull(),
+    answeredAt: text("answered_at").notNull(),
+    /** Topic ids from the taxonomy, suggested from the question and answer. */
+    topics: jsonb("topics").$type<string[]>().notNull(),
+    locations: jsonb("locations").$type<Location[]>().notNull(),
+    clientId: text("client_id").references(() => clients.id, { onDelete: "set null" }),
+    /** The strongest contradiction with a document when it was captured. */
+    conflict: jsonb("conflict").$type<AnswerConflict>(),
+    method: text("method").$type<"jev" | "rules">().notNull(),
+    /** The FAQ document it was written up in. */
+    faqDocId: text("faq_doc_id").references(() => documents.id, { onDelete: "set null" }),
+    /** The person who answered chose not to write it up (for now). */
+    faqDismissedAt: text("faq_dismissed_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("answers_question_idx").on(t.questionMessageId), index("answers_answerer_idx").on(t.answererId)],
 );

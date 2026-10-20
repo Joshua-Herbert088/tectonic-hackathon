@@ -95,6 +95,9 @@ function ComposeDialog({ request, onClose, onSent }: { request: ComposeRequest; 
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Answers among colleagues are kept for the next person with the same question, unless switched off here.
+  const [keepForOthers, setKeepForOthers] = useState(true);
+  const internal = !reply && to.length > 0 && to.every((p) => p.personId);
   const colleagues = useMemo(() => people.filter((p) => p.active && p.id !== viewerId), [people, viewerId]);
 
   const add = () => {
@@ -112,7 +115,8 @@ function ComposeDialog({ request, onClose, onSent }: { request: ComposeRequest; 
     try {
       const res = await fetch("/api/messages", {
         method: "POST",
-        body: JSON.stringify({ source: request.source, conversationId: request.conversationId, to, subject: reply ? undefined : subject, body }),
+        // Only switching it off is sent: an existing chat someone made private stays private.
+        body: JSON.stringify({ source: request.source, conversationId: request.conversationId, to, subject: reply ? undefined : subject, body, keepPrivate: internal && !keepForOthers ? true : undefined }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.issues?.join(", ") ?? json.error ?? `Sending failed (${res.status})`);
@@ -186,6 +190,15 @@ function ComposeDialog({ request, onClose, onSent }: { request: ComposeRequest; 
               <Icon name="cloudOff" size={14} color="#94a3b8" />
               Delivered inside TrustDrive: colleagues see it in Conversations and get a notification.
             </p>
+          )}
+          {internal && (
+            <label className="flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <input type="checkbox" checked={keepForOthers} onChange={(e) => setKeepForOthers(e.target.checked)} className="mt-0.5" />
+              <span>
+                <span className="font-medium text-slate-800">Keep answers for colleagues.</span> If this asks something work-related, the answer is kept so the next person with
+                the same question finds it, with a link to this message. Untick for anything personal.
+              </span>
+            </label>
           )}
           {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
         </div>

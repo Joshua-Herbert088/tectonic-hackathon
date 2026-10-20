@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { addMessages, createConversation, insertNotifications, loadConversations, loadWorld } from "./db";
+import { addMessages, createConversation, insertNotifications, loadConversations, loadWorld, setConversationPrivate } from "./db";
 import { HttpError } from "./http";
 import type { Client, Conversation, Db, Participant, Person } from "./types";
 
@@ -16,6 +16,8 @@ export interface Outgoing {
   to: Participant[];
   subject?: string;
   body: string;
+  /** "Don't keep for others" on (true) or off (false) for the conversation; unset leaves it as it is. */
+  keepPrivate?: boolean;
 }
 
 const PREVIEW_CHARS = 140;
@@ -57,11 +59,12 @@ export async function sendMessage(viewer: Person, out: Outgoing): Promise<{ conv
     title = conv.title;
     everyone = [...new Map([...conv.participants, ...to, me].map((p) => [keyOf(p), p])).values()];
     await addMessages(conv.id, [message], [...to, me]);
+    if (out.keepPrivate !== undefined && out.keepPrivate !== !!conv.keepPrivate) await setConversationPrivate(conv.id, out.keepPrivate);
   } else {
     conversationId = `conv-${crypto.randomUUID()}`;
     everyone = [me, ...to];
     title = out.subject?.trim() || (out.source === "teams" ? everyone.map((p) => p.name).join(", ") : "(no subject)");
-    await createConversation({ id: conversationId, source: out.source, title, clientId: clientOf(db, to)?.id, createdAt: message.sentAt, participants: everyone }, [message]);
+    await createConversation({ id: conversationId, source: out.source, title, clientId: clientOf(db, to)?.id, createdAt: message.sentAt, participants: everyone, keepPrivate: out.keepPrivate }, [message]);
   }
 
   // Colleagues on the thread hear about it; people who left don't.

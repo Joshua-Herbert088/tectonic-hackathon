@@ -119,6 +119,11 @@ export function taxonomyOf(terms: Term[]) {
       }
       return out;
     },
+    /** The topics among some tags, without a main topic when one of its sub-topics is there too. */
+    mostSpecific(tags: string[]) {
+      const topics = tags.filter((t) => topic.has(t));
+      return topics.filter((t) => !topics.some((c) => topic.get(c)?.parent === t));
+    },
     /** What a document's tags still lack before it can be saved: a document type and a topic. */
     missingTags(tags: string[]) {
       return [...(tags.some((t) => docType.has(t)) ? [] : ["a document type"]), ...(tags.some((t) => topic.has(t)) ? [] : ["a topic"])];

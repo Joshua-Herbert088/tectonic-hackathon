@@ -76,10 +76,30 @@ People who moved team rank lower and get a note. People who left the company are
 ### Who knows…? and profiles
 Sometimes the answer isn't a document but a person: who has dealt with this before, who really knows this client, who knows why we do it this way. **Who knows** (sidebar) answers that from work people already do, so there's no profile to fill in or keep up to date (`src/lib/expertise.ts`, `src/app/people/`, `src/app/person/[id]/`):
 - **Ask about a topic, a client or a country**, e.g. *overtime in Belgium*, *Noordkaai* or *wie kent de overuren?*. The question is matched to topics (by their names and keywords in four languages), clients and countries, and the page shows how it was read. If nothing is recognised, it searches the text of documents and conversations instead. Searching the drive shows the top three people above the results too.
-- **Evidence is only what someone produced:** owning a document, the share of its current text they wrote (from the line-level blame), edits, verifications, exceptions they kept on purpose with their reason, and messages in client conversations. Reading a document never counts. Every person comes with that evidence, linked to the document or conversation.
+- **Evidence is only what someone produced:** owning a document, the share of its current text they wrote (from the line-level blame), edits, verifications, exceptions they kept on purpose with their reason, answers to colleagues' questions (below) and messages in client conversations. Reading a document or asking a question never counts. Every person comes with that evidence, linked to the document or message.
 - **It stays current by itself:** evidence counts fully for three months, then half as much for every year after that. Ownership doesn't fade while someone is at the company. People who moved team get a note (and rank lower if they haven't worked on it since), and people who left are listed separately with a link to their handover briefing.
 - **Profile** (`/person/<id>`, or **Profile** next to any contact): the topics and clients someone knows, strongest first, each with its evidence and *fading* when nothing happened in a year; the documents they're in charge of; the exceptions they explained (*Knows why*); and who they work with most, through the same documents and conversations.
 - **"Not me any more":** on your own profile you can take a topic or client off; you're then no longer suggested for it, and only you still see it. That's the only human step.
+
+### Answers from email and Teams, kept for the next person
+When a colleague asks something by email or Teams and someone answers, the exchange is kept, so the next person with the same question finds the answer and who gave it (`src/lib/answers.ts`, run in the background after every message):
+- **What's kept:** in conversations among colleagues, a message ending in a question mark and the next reply by another colleague that actually says something (not "let me check", not a question back). The question and answer are quoted as written, with a link to the exact message. Client conversations aren't used: they have their own handover documents.
+- **Where it shows up:**
+  - *Asked before* on **Who knows** and above drive search results
+  - *Asked before in chat* next to **Who to contact** on a document about the same sub-topic
+  - *Answered recently* on the profile of whoever answered
+  - a label under the message in **Conversations**
+
+  Each answer is marked *From chat, not verified*.
+- **It counts for whoever answered, not whoever asked.** "Answered Jonas's question about overtime" is evidence on Lotte's profile and in **Who knows**, so expertise that only lives in chats becomes findable.
+- **Checked against the drive:** each answer gets topics and a country (Jev, or the keyword rules) and goes through the conflict check. When it contradicts a document, the line is underlined there ("Lotte answered Jonas differently in chat"), the answer shows the contradiction, and the document's owner gets a notification with both lines. Once either is fixed, the warning goes away.
+- **From answers to a document:** someone who answered three questions on the same topic in a year gets *You keep answering the same questions* on **For you** and their profile. **Draft an FAQ** builds it from their own answers, each quoted and linked to its message, and saves it through the usual tag, conflict and duplicate checks. Answers a document contradicts start unticked. **Not now** hides the suggestion until new questions come in.
+- **Privacy:**
+  - A new chat among colleagues has *Keep answers for colleagues* in the compose window; untick it for anything personal.
+  - Anyone on a conversation can switch it to **Don't keep for others** later, which deletes what was kept from it.
+  - Exchanges with health information, bank or national numbers, or a colleague's full name are never kept.
+
+In the demo, Jonas, Sofie and Karim asked Lotte about Belgian overtime. One answer ("max 120 hours per calendar year now") contradicts the outdated overtime policy, whose owner Marc moved team. So Lotte now comes first for *overtime in Belgium*, Marc is told his policy may be out of date, and Lotte is offered an overtime FAQ. One chat is private and one is about a named colleague's salary; neither is kept.
 
 ### Notifications
 The bell in the top bar notifies people when their information changes (`src/lib/notify.ts`):

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
+import { AnswerCard } from "@/components/Expertise";
 import { FileIcon } from "@/components/FileIcon";
 import { Icon } from "@/components/Icons";
 import { Markdown, type LineMark } from "@/components/Markdown";
@@ -21,9 +22,10 @@ import { VersionHistory } from "@/components/VersionHistory";
 import { WhoToContact } from "@/components/WhoToContact";
 import type { Contact, FormerContributor } from "@/lib/contacts";
 import { folderLabel, folderOptions } from "@/lib/folders";
+import { citationHref } from "@/lib/handoverDoc";
 import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
-import { STATUSES, type Client, type ConflictOverride, type Conversation, type Doc, type Doubt, type Folder, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
+import { STATUSES, type Answer, type Client, type ConflictOverride, type Conversation, type Doc, type Doubt, type Folder, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
 
 /** Non-breaking spaces: an option's text can't be indented with padding. */
 const INDENT = "\u00a0\u00a0\u00a0";
@@ -43,6 +45,8 @@ interface Detail {
   client: Client | null;
   sources: Conversation[];
   folders: Folder[];
+  /** Answers colleagues gave in chat on this document's topics, ones that contradict it first. */
+  answers: Answer[];
 }
 
 export default function DocPage() {
@@ -547,6 +551,17 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
                   </div>
                 )}
                 <WhoToContact docTitle={doc.title} contacts={detail.people.contacts} former={detail.people.former} />
+                {detail.answers.length > 0 && (
+                  <section className="border-b border-slate-100 p-5">
+                    <h3 className="text-sm font-medium text-slate-800">Asked before in chat</h3>
+                    <p className="mb-3 text-[11px] text-slate-500">Questions colleagues answered by email or Teams on this document&apos;s topics.</p>
+                    <div className="space-y-2">
+                      {detail.answers.map((a) => (
+                        <AnswerCard key={a.id} a={a} className="text-xs" />
+                      ))}
+                    </div>
+                  </section>
+                )}
                 <section className="border-b border-slate-100 p-5">
                   <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
                   <PersonRow label="Owner" id={doc.ownerId} />
@@ -745,6 +760,14 @@ function DoubtRow({ d, active, onFocus }: { d: Doubt; active: boolean; onFocus: 
           <span className="truncate italic">“{d.lineText}”</span>
         </div>
         <div className="text-slate-800">{d.text}</div>
+        {d.chat && (
+          <div className="mt-1.5 border-t border-slate-200 pt-1.5 text-slate-600">
+            “{d.chat.answerLine}”{" "}
+            <Link href={citationHref(d.chat.conversationId, d.chat.messageId, d.chat.answerLine)} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">
+              Read it in the chat
+            </Link>
+          </div>
+        )}
         {d.source && (
           <div className="mt-1.5 border-t border-slate-200 pt-1.5 text-slate-600">
             <Link href={`/doc/${d.source.docId}`} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">{d.source.title}</Link>, line {d.source.lineNo}: “{d.source.lineText}”

@@ -83,6 +83,11 @@ export function NotificationBell() {
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> changed {n.changes.length} line{n.changes.length === 1 ? "" : "s"} in your document <span className="font-medium text-slate-900">{n.docTitle}</span>
                           </>
+                        ) : n.kind === "answer" ? (
+                          <>
+                            <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> answered a colleague differently from your document <span className="font-medium text-slate-900">{n.docTitle}</span>. Is your
+                            document out of date, or the answer?
+                          </>
                         ) : (
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> saved <span className="font-medium text-slate-900">{n.otherDocTitle}</span>, which contradicts what you wrote in{" "}
@@ -99,7 +104,8 @@ export function NotificationBell() {
                             </div>
                           ))}
                         </div>
-                        {n.reason && n.kind !== "message" && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
+                        {n.reason && n.kind === "answer" && <div className="mt-1.5 text-xs italic text-slate-600">The question: “{n.reason}”</div>}
+                        {n.reason && n.kind !== "message" && n.kind !== "answer" && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
                         <div className="mt-2 flex gap-3 text-xs">
                           <button
                             onClick={() => {
@@ -116,11 +122,11 @@ export function NotificationBell() {
                               onClick={() => {
                                 markRead([n.id]);
                                 setOpen(false);
-                                router.push(`/doc/${n.otherDocId}`);
+                                router.push(n.kind === "answer" ? `/conversations?c=${n.otherDocId}` : `/doc/${n.otherDocId}`);
                               }}
                               className="text-blue-700 hover:underline"
                             >
-                              Open their document
+                              {n.kind === "answer" ? "Read the chat" : "Open their document"}
                             </button>
                           )}
                           {!n.readAt && <button onClick={() => markRead([n.id])} className="text-slate-500 hover:underline">Mark as read</button>}

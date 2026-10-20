@@ -23,6 +23,8 @@ export const newDocument = z.object({
   tags: z.array(text(60)).max(30).default([]),
   clientId: z.string().optional(),
   sourceConversationIds: z.array(z.string()).max(30).default([]),
+  /** Answers the creator gave in chat that this document writes up (an FAQ); see answers.ts. */
+  answerIds: z.array(z.number().int()).max(100).default([]),
   /** The folder it's created in; unknown or missing = the top of the drive. */
   folderId: z.string().optional(),
   /** Never sent to Jev. */

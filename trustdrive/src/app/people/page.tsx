@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
-import { EvidenceList } from "@/components/Expertise";
+import { AnswerCard, EvidenceList } from "@/components/Expertise";
 import { Avatar } from "@/components/TopBar";
 import { ContactLinks } from "@/components/WhoToContact";
 import type { Expert, WhoKnows } from "@/lib/expertise";
@@ -67,8 +67,8 @@ function WhoKnowsView() {
         <section className="rounded-2xl bg-white p-6">
           <h1 className="text-2xl text-slate-900">Who knows…?</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Ask about a topic, a client or a country. The answer comes from who wrote, verified and decided things in the drive, and who handled the client&apos;s mail and
-            chats. Nobody has to keep a profile up to date.
+            Ask about a topic, a client or a country. The answer comes from who wrote, verified and decided things in the drive, who answered colleagues&apos; questions,
+            and who handled the client&apos;s mail and chats. Nobody has to keep a profile up to date.
           </p>
           <form
             onSubmit={(e) => {
@@ -101,8 +101,9 @@ function WhoKnowsView() {
         {data && "query" in data && <Answer data={data} q={q} />}
 
         <p className="px-2 pb-4 text-[11px] leading-4 text-slate-500">
-          What counts: owning a document, the part of its current text someone wrote, edits, verifications, exceptions they kept on purpose (with their reason) and messages in
-          client conversations. Reading a document never counts. Evidence fades after three months: half as strong for every year after that. Anyone can take a topic or client
+          What counts: owning a document, the part of its current text someone wrote, edits, verifications, exceptions they kept on purpose (with their reason), answers to
+          colleagues&apos; questions in email and Teams, and messages in client conversations. Reading a document or asking a question never counts. Conversations marked
+          &ldquo;Don&apos;t keep for others&rdquo; are never used. Evidence fades after three months: half as strong for every year after that. Anyone can take a topic or client
           off their own profile.
         </p>
       </div>
@@ -133,7 +134,8 @@ function Understood({ data }: { data: WhoKnows }) {
         <span>No topic, client or country recognised. Searched the text for {u.words.map((w) => `“${w}”`).join(", ") || "nothing"}</span>
       )}
       <span className="text-slate-500">
-        · in {considered.documents} document{considered.documents === 1 ? "" : "s"} and {considered.conversations} conversation{considered.conversations === 1 ? "" : "s"}
+        · in {considered.documents} document{considered.documents === 1 ? "" : "s"}, {considered.conversations} client conversation{considered.conversations === 1 ? "" : "s"} and {considered.answers}{" "}
+        answer{considered.answers === 1 ? "" : "s"} in chat
       </span>
       {u.ignored.length > 0 && <span className="text-slate-400">· not used: {u.ignored.join(", ")}</span>}
     </div>
@@ -142,7 +144,7 @@ function Understood({ data }: { data: WhoKnows }) {
 
 function Answer({ data, q }: { data: WhoKnows; q: string }) {
   const { person } = useApp();
-  if (!data.experts.length && !data.former.length) {
+  if (!data.experts.length && !data.former.length && !data.answers.length) {
     return (
       <section className="rounded-2xl bg-white p-6 text-sm text-slate-600">
         Nobody has worked on this in TrustDrive yet. Try a broader topic, or the name of the client.
@@ -151,6 +153,17 @@ function Answer({ data, q }: { data: WhoKnows; q: string }) {
   }
   return (
     <>
+      {data.answers.length > 0 && (
+        <section className="rounded-2xl bg-white p-6">
+          <h2 className="text-sm font-medium text-slate-800">Asked before</h2>
+          <p className="mb-3 text-[11px] text-slate-500">Colleagues asked this in email or Teams. The answers are quoted as written; open the chat to read the whole exchange.</p>
+          <div className="space-y-3">
+            {data.answers.map((a) => (
+              <AnswerCard key={a.id} a={a} />
+            ))}
+          </div>
+        </section>
+      )}
       {data.experts.length > 0 ? (
         <section className="rounded-2xl bg-white p-6">
           <ul className="divide-y divide-slate-100">
@@ -197,7 +210,13 @@ function ExpertRow({ e, best, subject }: { e: Expert; best: boolean; subject: st
   const [open, setOpen] = useState(false);
   const p = person(e.personId);
   const shown = open ? e.evidence : e.evidence.slice(0, 3);
-  const counts = [e.documents && `${e.documents} document${e.documents === 1 ? "" : "s"}`, e.conversations && `${e.conversations} conversation${e.conversations === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+  const counts = [
+    e.documents && `${e.documents} document${e.documents === 1 ? "" : "s"}`,
+    e.answers && `answered ${e.answers} question${e.answers === 1 ? "" : "s"}`,
+    e.conversations && `${e.conversations} client conversation${e.conversations === 1 ? "" : "s"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <li className="flex gap-3 py-4 first:pt-0 last:pb-0">
       <Avatar person={p} size={40} />

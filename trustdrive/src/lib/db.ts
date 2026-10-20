@@ -14,7 +14,7 @@ import { log } from "./log";
 import { buildConversations, buildSeed, seedHistory } from "./seed";
 import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
 import { formatLocations } from "./appliesTo";
-import type { Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
+import type { Answer, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
 
 /**
  * Database access. Postgres everywhere: any Postgres server when DATABASE_URL is set, otherwise
@@ -173,7 +173,7 @@ async function syncSeed(orm: Orm) {
 export async function resetDb() {
   const orm = await db();
   await orm.transaction(async (tx) => {
-    for (const t of [schema.notifications, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+    for (const t of [schema.notifications, schema.answers, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
       await tx.delete(t);
     }
   });
@@ -542,10 +542,11 @@ export async function loadConversations(ids?: string[]): Promise<Conversation[]>
   const byConversation = groupBy(msgs, (m) => m.conversationId);
   const last = (c: Conversation) => c.messages.at(-1)?.sentAt ?? c.createdAt;
   return convs
-    .map((c) => ({
+    .map(({ answersThroughId: _through, keepPrivate, ...c }) => ({
       ...c,
       clientId: c.clientId ?? undefined,
       importedById: c.importedById ?? undefined,
+      keepPrivate: keepPrivate || undefined,
       messages: (byConversation.get(c.id) ?? []).map(toMessage),
     }))
     .sort((a, b) => last(b).localeCompare(last(a)));
@@ -568,6 +569,71 @@ export async function addMessages(conversationId: string, messages: Omit<Message
     await tx.update(schema.conversations).set({ participants: [...all.values()] }).where(eq(schema.conversations.id, conversationId));
     if (messages.length) await tx.insert(schema.messages).values(messages.map((m) => ({ ...m, conversationId })));
   });
+}
+
+/**
+ * "Don't keep for others" on or off. Making a conversation private deletes the answers captured from it;
+ * either way it's looked at again from the start on the next capture.
+ */
+export async function setConversationPrivate(conversationId: string, keepPrivate: boolean) {
+  await (await db()).transaction(async (tx) => {
+    await tx.update(schema.conversations).set({ keepPrivate, answersThroughId: null }).where(eq(schema.conversations.id, conversationId));
+    if (keepPrivate) await tx.delete(schema.answers).where(eq(schema.answers.conversationId, conversationId));
+  });
+}
+
+/** For each conversation: whether it's private, and the last message already looked at for answers. */
+export async function answerProgress() {
+  const rows = await (await db()).select({ id: schema.conversations.id, keepPrivate: schema.conversations.keepPrivate, through: schema.conversations.answersThroughId }).from(schema.conversations);
+  return new Map(rows.map((r) => [r.id, { keepPrivate: r.keepPrivate, through: r.through }]));
+}
+
+export async function setAnswersThrough(conversationId: string, messageId: number) {
+  await (await db()).update(schema.conversations).set({ answersThroughId: messageId }).where(eq(schema.conversations.id, conversationId));
+}
+
+export type NewAnswer = Omit<typeof schema.answers.$inferInsert, "id" | "createdAt">;
+
+/** Stores captured answers; a question that already has one is skipped. Returns the ids of the new ones. */
+export async function insertAnswers(rows: NewAnswer[]) {
+  if (!rows.length) return [];
+  const now = new Date().toISOString();
+  const inserted = await (await db())
+    .insert(schema.answers)
+    .values(rows.map((r) => ({ ...r, createdAt: now })))
+    .onConflictDoNothing({ target: schema.answers.questionMessageId })
+    .returning({ id: schema.answers.id, questionMessageId: schema.answers.questionMessageId });
+  return inserted;
+}
+
+/** Every captured answer, newest first, with its conversation's title and kind. */
+export async function loadAnswers(): Promise<Answer[]> {
+  const rows = await (await db())
+    .select({ a: schema.answers, title: schema.conversations.title, source: schema.conversations.source })
+    .from(schema.answers)
+    .innerJoin(schema.conversations, eq(schema.answers.conversationId, schema.conversations.id))
+    .orderBy(desc(schema.answers.answeredAt));
+  return rows.map(({ a: { createdAt: _created, ...a }, title, source }) => ({
+    ...a,
+    conversationTitle: title,
+    source,
+    clientId: a.clientId ?? undefined,
+    conflict: a.conflict ?? undefined,
+    faqDocId: a.faqDocId ?? undefined,
+    faqDismissedAt: a.faqDismissedAt ?? undefined,
+  }));
+}
+
+/** Answers someone gave that are now written up in a document. Only their own answers are changed. */
+export async function markAnswersInFaq(answerIds: number[], answererId: string, docId: string) {
+  if (!answerIds.length) return;
+  await (await db()).update(schema.answers).set({ faqDocId: docId }).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
+}
+
+/** "Not now" on writing these answers up. Only their own answers are changed. */
+export async function dismissFaq(answerIds: number[], answererId: string) {
+  if (!answerIds.length) return;
+  await (await db()).update(schema.answers).set({ faqDismissedAt: new Date().toISOString() }).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
 }
 
 /** Conversations a document was written from. */

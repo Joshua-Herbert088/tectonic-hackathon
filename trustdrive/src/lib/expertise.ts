@@ -1,15 +1,18 @@
+import { isInternal } from "./answerDoc";
+import { faqSuggestions, withLiveConflicts } from "./answers";
 import { isGlobal } from "./appliesTo";
 import { blame } from "./diff";
 import { fold } from "./lexicon";
 import { keywordHits, taxonomyOf, type Taxonomy } from "./taxonomy";
 import { daysSince, timeAgo } from "./time";
-import type { Client, Conversation, Db, Doc, Person } from "./types";
+import type { Answer, Client, Conversation, Db, Doc, Location, Person } from "./types";
 
 /**
  * Who knows what, worked out from work people already do in TrustDrive. Nobody fills in a profile.
  * - Evidence is only what someone produced: owning a document, the share of its current text they wrote,
- *   edits, verifications, deliberate exceptions to a conflict (with their reason), and messages in client
- *   conversations. Reading a document never counts.
+ *   edits, verifications, deliberate exceptions to a conflict (with their reason), messages in client
+ *   conversations, and answers to colleagues' questions (answers.ts). Reading a document or asking a
+ *   question never counts.
  * - Every claim comes with the evidence behind it, so anyone can check it.
  * - Evidence fades: full strength for three months, then half as strong for every year after that.
  *   Ownership and collaboration are ongoing, so they don't fade.
@@ -21,7 +24,8 @@ export interface Evidence {
   /** What they did, e.g. "Wrote 64% of"; the document or conversation follows. */
   action: string;
   doc?: { id: string; title: string };
-  conversation?: { id: string; title: string };
+  /** With `messageId`, the message it's about. */
+  conversation?: { id: string; title: string; messageId?: number };
   /** More context, such as the reason given for an exception. */
   detail?: string;
   /** When it happened; unset for ongoing roles (owner, collaborator). */
@@ -31,10 +35,11 @@ export interface Evidence {
 
 type History = Map<string, { personId: string | null; at: string; content: string }[]>;
 
-/** Everyone's evidence, per document and per conversation (personId → evidence). */
+/** Everyone's evidence, per document and per client conversation (personId → evidence), and per answer (the answerer's). */
 export interface Ledger {
   docs: Map<string, Map<string, Evidence[]>>;
   conversations: Map<string, Map<string, Evidence[]>>;
+  answers: Map<number, Evidence>;
 }
 
 const FRESH_DAYS = 90;
@@ -42,10 +47,13 @@ const HALF_LIFE_DAYS = 365;
 const MIN_SCORE = 3;
 const MAX_EXPERTS = 8;
 const MAX_EVIDENCE = 6;
+const MAX_ANSWERS = 4;
 /** Documents for another country than the one asked about still count, but much less. */
 const OTHER_COUNTRY = 0.15;
 /** A conversation that only mentions a topic says less than a document tagged with it. */
 const MENTIONED = 0.6;
+/** Answering a colleague's question: about as strong as verifying a document. */
+const ANSWER_WEIGHT = 8;
 /** Moved team and hasn't worked on it since. */
 const MOVED_AWAY = 0.8;
 
@@ -103,10 +111,27 @@ function conversationEvidence(c: Conversation) {
   return new Map([...mine].map(([pid, { n, last }]) => [pid, [{ action: n === 1 ? "Wrote in" : `Wrote ${n} messages in`, conversation: ref, weight: 2 + 1.5 * Math.min(n, 4), at: last }]]));
 }
 
-export function buildLedger(db: Db, history: History, conversations: Conversation[]): Ledger {
+/** Answering a colleague's question counts; asking one doesn't. */
+function answerEvidence(db: Db, a: Answer): Evidence {
+  const asker = db.people.find((p) => p.id === a.askerId)?.name.split(" ")[0];
+  return {
+    action: `Answered ${asker ? `${asker}'s` : "a"} question in`,
+    conversation: { id: a.conversationId, title: a.conversationTitle, messageId: a.answerMessageId },
+    detail: `“${a.question}”`,
+    at: a.answeredAt,
+    weight: ANSWER_WEIGHT,
+  };
+}
+
+/**
+ * Chats among colleagues only count through the answers captured from them: being in the thread, or
+ * asking, says nothing about what someone knows.
+ */
+export function buildLedger(db: Db, history: History, conversations: Conversation[], answers: Answer[] = []): Ledger {
   return {
     docs: new Map(db.docs.map((d) => [d.id, docEvidence(db, d, history)])),
-    conversations: new Map(conversations.map((c) => [c.id, conversationEvidence(c)])),
+    conversations: new Map(conversations.filter((c) => !isInternal(c)).map((c) => [c.id, conversationEvidence(c)])),
+    answers: new Map(answers.map((a) => [a.id, answerEvidence(db, a)])),
   };
 }
 
@@ -161,7 +186,7 @@ export function interpret(db: Db, query: string): Interpretation {
   };
 }
 
-/** One reason a document or conversation is relevant; `key` is what a person can hide ("topic:salary"). */
+/** One reason a document, conversation or answer is relevant; `key` is what a person can hide ("topic:salary"). */
 interface Hit {
   key: string;
   score: number;
@@ -169,7 +194,16 @@ interface Hit {
 
 const countryOnly = (q: Interpretation) => !q.topics.length && !q.clients.length && !q.words.length;
 
-function docHits(tax: Taxonomy, doc: Doc, q: Interpretation): Hit[] {
+/** What a document or a captured answer is about (an answer's question is its title). */
+interface Subject {
+  tags: string[];
+  clientId?: string;
+  title: string;
+  content: string;
+  locations: Location[];
+}
+
+function hitsFor(tax: Taxonomy, doc: Subject, q: Interpretation): Hit[] {
   const hits: Hit[] = [];
   for (const t of q.topics) if (doc.tags.includes(t.id) || doc.tags.some((x) => tax.topic.get(x)?.parent === t.id)) hits.push({ key: `topic:${t.id}`, score: 1 });
   for (const c of q.clients) if (doc.clientId === c.id) hits.push({ key: `client:${c.id}`, score: 1 });
@@ -183,6 +217,8 @@ function docHits(tax: Taxonomy, doc: Doc, q: Interpretation): Hit[] {
   const here = isGlobal(doc.locations) || q.countries.some((c) => doc.locations.includes(c));
   return here ? hits : hits.map((h) => ({ ...h, score: h.score * OTHER_COUNTRY }));
 }
+
+const answerSubject = (a: Answer): Subject => ({ tags: a.topics, clientId: a.clientId, title: a.question, content: a.answer, locations: a.locations });
 
 function conversationHits(db: Db, tax: Taxonomy, c: Conversation, q: Interpretation): Hit[] {
   const text = `${c.title}\n${c.messages.map((m) => m.body).join("\n")}`;
@@ -212,6 +248,8 @@ export interface Expert {
   evidenceCount: number;
   documents: number;
   conversations: number;
+  /** Colleagues' questions on this they answered. */
+  answers: number;
   lastActive: string | null;
   caveat?: string;
 }
@@ -225,31 +263,35 @@ export interface FormerExpert {
 const latest = (evidence: Evidence[]) => evidence.reduce<string | null>((m, e) => (e.at && (!m || e.at > m) ? e.at : m), null);
 
 /**
- * Colleagues ranked by evidence on the documents and conversations a question is about. Each document's
- * relevance multiplies the (faded) evidence on it; a topic or client someone hid doesn't count for them.
- * People who left are listed separately: their handover briefing holds what they knew.
+ * Colleagues ranked by evidence on the documents, client conversations and answers a question is about.
+ * Each item's relevance multiplies the (faded) evidence on it; a topic or client someone hid doesn't
+ * count for them. People who left are listed separately: their handover briefing holds what they knew.
+ * Also returns the answers themselves: someone may have asked this before.
  */
-export function whoKnows(db: Db, ledger: Ledger, conversations: Conversation[], query: string, viewer: Person, now = Date.now()) {
+export function whoKnows(db: Db, ledger: Ledger, conversations: Conversation[], answers: Answer[], query: string, viewer: Person, now = Date.now()) {
   const tax = taxonomyOf(db.terms);
   const q = interpret(db, query);
+  const answerHits = new Map(answers.map((a) => [a.id, hitsFor(tax, answerSubject(a), q)]));
   const items = [
-    ...db.docs.map((d) => ({ hits: docHits(tax, d, q), people: ledger.docs.get(d.id), kind: "doc" as const })),
+    ...db.docs.map((d) => ({ hits: hitsFor(tax, d, q), people: ledger.docs.get(d.id), kind: "doc" as const })),
     ...conversations.map((c) => ({ hits: conversationHits(db, tax, c, q), people: ledger.conversations.get(c.id), kind: "conversation" as const })),
+    ...answers.map((a) => ({ hits: answerHits.get(a.id)!, people: new Map([[a.answererId, [ledger.answers.get(a.id)!]]]), kind: "answer" as const })),
   ].filter((x) => x.hits.length && x.people);
 
-  const tally = new Map<string, { score: number; evidence: { e: Evidence; s: number }[]; docs: number; conversations: number }>();
+  const tally = new Map<string, { score: number; evidence: { e: Evidence; s: number }[]; docs: number; conversations: number; answers: number }>();
   for (const item of items) {
     for (const [pid, evidence] of item.people!) {
       const hidden = new Set(db.people.find((p) => p.id === pid)?.hiddenExpertise ?? []);
       const relevance = Math.max(0, ...item.hits.filter((h) => !hidden.has(h.key)).map((h) => h.score));
       if (!relevance) continue;
-      const t = tally.get(pid) ?? { score: 0, evidence: [], docs: 0, conversations: 0 };
+      const t = tally.get(pid) ?? { score: 0, evidence: [], docs: 0, conversations: 0, answers: 0 };
       for (const e of evidence) {
         const s = relevance * strength(e, now);
         t.score += s;
         t.evidence.push({ e, s });
       }
       if (item.kind === "doc") t.docs++;
+      else if (item.kind === "answer") t.answers++;
       else t.conversations++;
       tally.set(pid, t);
     }
@@ -276,17 +318,30 @@ export function whoKnows(db: Db, ledger: Ledger, conversations: Conversation[], 
         score *= MOVED_AWAY;
       }
     }
-    experts.push({ personId: pid, score, relevance: 0, evidence: evidence.slice(0, MAX_EVIDENCE), evidenceCount: evidence.length, documents: t.docs, conversations: t.conversations, lastActive, caveat });
+    experts.push({ personId: pid, score, relevance: 0, evidence: evidence.slice(0, MAX_EVIDENCE), evidenceCount: evidence.length, documents: t.docs, conversations: t.conversations, answers: t.answers, lastActive, caveat });
   }
   experts.sort((a, b) => b.score - a.score);
   const top = experts.slice(0, MAX_EXPERTS);
   for (const e of top) e.relevance = e.score / (top[0]?.score || 1);
   former.sort((a, b) => (tally.get(b.personId)?.score ?? 0) - (tally.get(a.personId)?.score ?? 0));
+
+  // Asked before: the most relevant answers, recent ones first among equals.
+  const asked = answers
+    .map((a) => ({ a, s: Math.max(0, ...answerHits.get(a.id)!.map((h) => h.score)) * fade({ action: "", weight: 1, at: a.answeredAt }, now) }))
+    .filter((x) => x.s > 0)
+    .sort((x, y) => y.s - x.s)
+    .slice(0, MAX_ANSWERS)
+    .map((x) => x.a);
   return {
     query: q,
     experts: top,
     former: former.slice(0, 4),
-    considered: { documents: items.filter((i) => i.kind === "doc").length, conversations: items.filter((i) => i.kind === "conversation").length },
+    answers: withLiveConflicts(db, asked),
+    considered: {
+      documents: items.filter((i) => i.kind === "doc").length,
+      conversations: items.filter((i) => i.kind === "conversation").length,
+      answers: items.filter((i) => i.kind === "answer").length,
+    },
   };
 }
 
@@ -312,6 +367,7 @@ export interface Area {
   relevance: number;
   documents: number;
   conversations: number;
+  answers: number;
   lastActive: string | null;
   /** No ongoing role and nothing in the last year. */
   fading: boolean;
@@ -319,25 +375,27 @@ export interface Area {
   evidence: Evidence[];
 }
 
-/** The topics a document counts for: its topic tags, without a main topic when one of its sub-topics is there. */
-function areaTopics(tax: Taxonomy, doc: Doc) {
-  const topics = doc.tags.filter((t) => tax.topic.has(t));
-  return topics.filter((t) => !topics.some((c) => tax.topic.get(c)?.parent === t));
-}
+const RECENT_ANSWERS = 5;
 
 /**
  * Someone's profile, from their evidence: the topics and clients they know (strongest first, each with
- * its evidence), what they're in charge of, the decisions they explained, and who they work with most.
- * Hidden areas are only shown to the person themselves.
+ * its evidence), what they're in charge of, the decisions they explained, the questions they answered
+ * and who they work with most. Hidden areas, and suggestions to write answers up, are only for the person
+ * themselves.
  */
-export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[], person: Person, viewer: Person, now = Date.now()) {
+export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[], answers: Answer[], person: Person, viewer: Person, now = Date.now()) {
   const tax = taxonomyOf(db.terms);
   const hidden = new Set(person.hiddenExpertise ?? []);
   const own = viewer.id === person.id;
 
-  const areas = new Map<string, { label: string; parentLabel?: string; s: number; docs: Set<string>; convs: Set<string>; evidence: { e: Evidence; s: number }[] }>();
-  const area = (key: string, label: string, parentLabel?: string) => areas.get(key) ?? (areas.set(key, { label, parentLabel, s: 0, docs: new Set(), convs: new Set(), evidence: [] }), areas.get(key)!);
-  const credit = (a: ReturnType<typeof area>, evidence: Evidence[], ref: { doc?: string; conv?: string }) => {
+  const areas = new Map<string, { label: string; parentLabel?: string; s: number; docs: Set<string>; convs: Set<string>; answers: Set<number>; evidence: { e: Evidence; s: number }[] }>();
+  const area = (key: string, label: string, parentLabel?: string) =>
+    areas.get(key) ?? (areas.set(key, { label, parentLabel, s: 0, docs: new Set(), convs: new Set(), answers: new Set(), evidence: [] }), areas.get(key)!);
+  const topicArea = (t: string) => {
+    const term = tax.topic.get(t)!;
+    return area(`topic:${t}`, term.label, term.parent ? tax.tagLabel(term.parent) : undefined);
+  };
+  const credit = (a: ReturnType<typeof area>, evidence: Evidence[], ref: { doc?: string; conv?: string; answer?: number }) => {
     for (const e of evidence) {
       const s = strength(e, now);
       a.s += s;
@@ -345,6 +403,7 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     }
     if (ref.doc) a.docs.add(ref.doc);
     if (ref.conv) a.convs.add(ref.conv);
+    if (ref.answer) a.answers.add(ref.answer);
   };
 
   const worksWith = new Map<string, { s: number; shared: { kind: "doc" | "conversation"; id: string; title: string }[] }>();
@@ -365,10 +424,7 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     const mine = people?.get(person.id);
     if (!people || !mine) continue;
     documents++;
-    for (const t of areaTopics(tax, doc)) {
-      const term = tax.topic.get(t)!;
-      credit(area(`topic:${t}`, term.label, term.parent ? tax.tagLabel(term.parent) : undefined), mine, { doc: doc.id });
-    }
+    for (const t of tax.mostSpecific(doc.tags)) credit(topicArea(t), mine, { doc: doc.id });
     const client = db.clients.find((c) => c.id === doc.clientId);
     if (client) credit(area(`client:${client.id}`, client.name), mine, { doc: doc.id });
     together(people, mine, { kind: "doc", id: doc.id, title: doc.title });
@@ -382,6 +438,14 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     const client = db.clients.find((x) => x.id === c.clientId);
     if (client) credit(area(`client:${client.id}`, client.name), mine, { conv: c.id });
     together(people, mine, { kind: "conversation", id: c.id, title: c.title });
+  }
+  const answered = answers.filter((a) => a.answererId === person.id);
+  for (const a of answered) {
+    const e = ledger.answers.get(a.id);
+    if (!e) continue;
+    for (const t of tax.mostSpecific(a.topics)) credit(topicArea(t), [e], { answer: a.id });
+    const client = db.clients.find((c) => c.id === a.clientId);
+    if (client) credit(area(`client:${client.id}`, client.name), [e], { answer: a.id });
   }
 
   const listed = [...areas].filter(([key]) => own || !hidden.has(key));
@@ -399,6 +463,7 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
       relevance: hidden.has(key) ? 0 : a.s / max,
       documents: a.docs.size,
       conversations: a.convs.size,
+      answers: a.answers.size,
       lastActive,
       fading: !ongoing && (!lastActive || daysSince(lastActive, now) > 365),
       hidden: hidden.has(key),
@@ -439,7 +504,16 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     decisions,
     inCharge,
     worksWith: colleagues,
-    stats: { documents, conversations: conversationCount, verifiedLastYear, decisions: decisions.length },
+    // Newest first, like everything else; only the ones about topics they didn't hide, for anyone else.
+    answers: withLiveConflicts(db, answered.filter((a) => own || !tax.mostSpecific(a.topics).some((t) => hidden.has(`topic:${t}`))).slice(0, RECENT_ANSWERS)),
+    faqs: own ? faqSuggestions(db, answers, person.id, now) : [],
+    stats: {
+      documents,
+      conversations: conversationCount,
+      verifiedLastYear,
+      decisions: decisions.length,
+      answeredLastYear: answered.filter((a) => daysSince(a.answeredAt, now) <= 365).length,
+    },
   };
 }
 

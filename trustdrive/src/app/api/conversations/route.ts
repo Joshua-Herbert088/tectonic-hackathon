@@ -1,13 +1,20 @@
 import crypto from "node:crypto";
+import { after } from "next/server";
+import { captureAnswers } from "@/lib/answers";
 import { requireViewer } from "@/lib/auth";
 import { matchAuthors, parseEmailChain, parseEml, parseTeamsChat } from "@/lib/conversationImport";
-import { createConversation, loadConversations, loadWorld } from "@/lib/db";
+import { createConversation, loadAnswers, loadConversations, loadWorld } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { conversationImport } from "@/lib/schemas";
 
+/** All conversations, and which messages were kept as answers to a colleague's question. */
 export const GET = handle(async (req) => {
   await requireViewer(req);
-  return Response.json({ conversations: await loadConversations() });
+  const [conversations, answers] = await Promise.all([loadConversations(), loadAnswers()]);
+  return Response.json({
+    conversations,
+    answers: answers.map((a) => ({ id: a.id, conversationId: a.conversationId, questionMessageId: a.questionMessageId, answerMessageId: a.answerMessageId, askerId: a.askerId, topics: a.topics })),
+  });
 });
 
 /**
@@ -39,5 +46,6 @@ export const POST = handle(async (req) => {
   const id = `conv-${crypto.randomUUID()}`;
   const participants = [...new Map(messages.map((m) => [m.authorEmail ?? m.authorName, { personId: m.personId, name: m.authorName, email: m.authorEmail }])).values()];
   await createConversation({ id, source: body.source, title, clientId, importedById: viewer.id, createdAt: now, participants }, messages);
+  after(captureAnswers);
   return Response.json({ id, clientId: clientId ?? null, messages: messages.length });
 });

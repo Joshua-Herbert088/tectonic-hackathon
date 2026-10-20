@@ -5,11 +5,13 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { MESSAGE_SENT, useCompose } from "@/components/Compose";
 import { useApp } from "@/components/AppContext";
+import { FaqSuggestions } from "@/components/FaqSuggestions";
 import { Icon } from "@/components/Icons";
 import { ConfidentialPill } from "@/components/StatusPill";
 import { Avatar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
+import type { FaqSuggestion } from "@/lib/answers";
 import { daysSince, timeAgo } from "@/lib/time";
 import type { Doc, Person, TrustScore } from "@/lib/types";
 
@@ -23,6 +25,7 @@ interface Home {
   handovers: { formerOwnerId: string | null; reason: string; docs: { id: string; title: string }[] }[];
   impact: { opens: number; readers: number; latestOpen: { personId: string; at: string; docId: string; title: string } | null; verified: number; topics: string[] };
   fresh: Row[];
+  faqs: FaqSuggestion[];
 }
 
 const STALE_DAYS = 180;
@@ -142,6 +145,7 @@ function HomeView({ viewerId }: { viewerId: string }) {
 
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] [&>*]:min-w-0">
           <div className="space-y-6">
+            {data.faqs.length > 0 && <FaqSuggestions faqs={data.faqs} onDismissed={() => setReload((n) => n + 1)} />}
             <Card
               icon="check"
               title="Quick wins"

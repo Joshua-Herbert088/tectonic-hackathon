@@ -66,6 +66,45 @@ export interface Conversation {
   createdAt: string;
   participants: Participant[];
   messages: Message[];
+  /** "Don't keep for others": its answers are never captured. */
+  keepPrivate?: boolean;
+}
+
+/** A captured answer that says something else than a document. */
+export interface AnswerConflict {
+  docId: string;
+  title: string;
+  lineNo: number;
+  lineText: string;
+  /** The line of the answer that disagrees. */
+  answerLine: string;
+  probability: number;
+  severity: "hard" | "possible";
+  ownerId: string | null;
+}
+
+/** A question asked in an internal email or Teams chat, and the answer a colleague gave (see answers.ts). */
+export interface Answer {
+  id: number;
+  conversationId: string;
+  conversationTitle: string;
+  source: "email" | "teams";
+  questionMessageId: number;
+  answerMessageId: number;
+  askerId: string;
+  answererId: string;
+  question: string;
+  /** One statement per line. */
+  answer: string;
+  askedAt: string;
+  answeredAt: string;
+  topics: string[];
+  locations: Location[];
+  clientId?: string;
+  conflict?: AnswerConflict;
+  method: "jev" | "rules";
+  faqDocId?: string;
+  faqDismissedAt?: string;
 }
 
 export interface Verification {
@@ -211,10 +250,12 @@ export interface Doubt {
   /** The line as a reader sees it (markdown stripped). */
   lineText: string;
   tone: "bad" | "warn";
-  kind: "contradiction" | "override" | "outdated";
+  kind: "contradiction" | "override" | "outdated" | "answer";
   text: string;
   /** The other document's line, for contradictions. */
   source?: Conflict["existing"];
+  /** The answer in chat that says otherwise. */
+  chat?: { conversationId: string; messageId: number; title: string; answerLine: string };
 }
 
 /** Why a document needs a new owner and who could take it over. */

@@ -1442,6 +1442,12 @@ export function buildConversations(now = Date.now()): (Omit<Conversation, "messa
   const sofie = { personId: "sofie", authorName: "Sofie Willems", authorEmail: "sofie.willems@trustdrive.example" };
   const marloes = { authorName: "Marloes Vink", authorEmail: "marloes.vink@havenstaal.example" };
   const lars = { personId: "lars", authorName: "Lars de Jong", authorEmail: "lars.de.jong@trustdrive.example" };
+  const colleague = (id: string, name: string) => ({ personId: id, authorName: name, authorEmail: `${name.toLowerCase().replace(/ /g, ".")}@trustdrive.example` });
+  const lotte = colleague("lotte", "Lotte Peeters");
+  const jonas = colleague("jonas", "Jonas Maes");
+  const karim = colleague("karim", "Karim El Amrani");
+  const emma = colleague("emma", "Emma Visser");
+  const an = colleague("an", "An Claes");
 
   return withParticipants([
     {
@@ -1528,6 +1534,73 @@ export function buildConversations(now = Date.now()): (Omit<Conversation, "messa
           body: "Beste Lars,\n\nZoals besproken betalen wij het vakantiegeld in twee delen uit: 50% in mei en 50% in december. Kunnen jullie dat zo inplannen?\n\nMet vriendelijke groeten,\nMarloes Vink",
         },
         { ...lars, sentAt: ago(199), body: "Hoi Marloes,\n\nAfgesproken: vakantiegeld 50% in mei en 50% in december, vanaf 2026.\n\nGroet,\nLars" },
+      ],
+    },
+
+    // Colleagues asking each other: answers.ts keeps these for the next person with the same question.
+    {
+      id: "conv-qa-overtime-recovery",
+      source: "email",
+      title: "Recovery time for overtime",
+      createdAt: ago(70),
+      messages: [
+        { ...sofie, sentAt: ago(70), body: "Hi Lotte,\n\nWithin which period does recovery time for overtime have to be granted?\n\nThanks,\nSofie" },
+        { ...lotte, sentAt: ago(69, 20), body: "Hi Sofie,\n\nRecovery time has to be granted within the reference period of 3 months. Voluntary overtime is the exception: it is paid out and never recovered.\n\nBest regards,\nLotte" },
+      ],
+    },
+    {
+      id: "conv-qa-overtime-hours",
+      source: "teams",
+      title: "Jonas Maes, Lotte Peeters",
+      createdAt: ago(40),
+      messages: [
+        { ...jonas, sentAt: ago(40, 3), body: "Quick question: how many hours of voluntary overtime can an employee do per calendar year in Belgium?" },
+        { ...lotte, sentAt: ago(40, 2), body: "Voluntary overtime is max 120 hours per calendar year now. They're paid out with the overtime premium, without recovery time." },
+        { ...jonas, sentAt: ago(40, 2), body: "Thanks!" },
+      ],
+    },
+    {
+      id: "conv-qa-overtime-parttime",
+      source: "teams",
+      title: "Karim El Amrani, Lotte Peeters",
+      createdAt: ago(15),
+      messages: [
+        { ...karim, sentAt: ago(15, 6), body: "Does the overtime premium of +100% on Sundays also apply to part-timers?" },
+        { ...lotte, sentAt: ago(15, 5), body: "Yes, part-timers get the same overtime premiums: +50% on weekdays, +100% on Sundays and public holidays." },
+      ],
+    },
+    {
+      id: "conv-qa-vakantiegeld",
+      source: "teams",
+      title: "Emma Visser, Lars de Jong",
+      createdAt: ago(9),
+      messages: [
+        { ...emma, sentAt: ago(9, 4), body: "Hoe berekenen we het vakantiegeld voor iemand die halverwege het jaar in dienst komt?" },
+        { ...lars, sentAt: ago(9, 3), body: "Vakantiegeld is 8% van het brutoloon over de opbouwperiode van juni tot en met mei. Voor iemand die later start reken je naar rato van de maanden in dienst." },
+        { ...emma, sentAt: ago(9, 3), body: "Top, dank je!" },
+      ],
+    },
+    {
+      // About a colleague by name: never kept as an answer.
+      id: "conv-qa-named-salary",
+      source: "teams",
+      title: "Jonas Maes, Sofie Willems",
+      createdAt: ago(3),
+      messages: [
+        { ...jonas, sentAt: ago(3, 2), body: "What's the gross monthly salary of Karim El Amrani again? I need it for the indexation simulation?" },
+        { ...sofie, sentAt: ago(3, 1), body: "It's in the salary register: €3,450 gross per month." },
+      ],
+    },
+    {
+      // "Don't keep for others": nothing in it is kept.
+      id: "conv-qa-private",
+      source: "teams",
+      title: "Karim El Amrani, An Claes",
+      keepPrivate: true,
+      createdAt: ago(5),
+      messages: [
+        { ...karim, sentAt: ago(5, 2), body: "Can I take two weeks of parental leave in March, or is that a bad time for the team?" },
+        { ...an, sentAt: ago(5, 1), body: "March is fine for the team, just put the dates in the leave planning before the end of the month." },
       ],
     },
   ]);

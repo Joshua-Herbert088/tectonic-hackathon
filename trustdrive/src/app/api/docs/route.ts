@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { requireViewer } from "@/lib/auth";
-import { createDocument, loadWorld, recordOverrides } from "@/lib/db";
+import { createDocument, loadWorld, markAnswersInFaq, recordOverrides } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { notifyOverrides } from "@/lib/notify";
 import { newDocument } from "@/lib/schemas";
@@ -42,6 +42,8 @@ export const POST = handle(async (req) => {
     { id, title, kind: body.kind, content: body.content, ownerId: viewer.id, locations, audienceTeamIds, status: body.status ?? "WIP", teamId, tags: body.tags, createdAt: now, updatedAt: now, lastEditedById: viewer.id, clientId, folderId, confidential: body.confidential },
     body.sourceConversationIds,
   );
+  // Written up: these answers stop counting towards an FAQ suggestion, and point to the document.
+  await markAnswersInFaq(body.answerIds, viewer.id, id);
   const reason = body.override?.reason ?? "";
   await recordOverrides(id, viewer.id, reason, gate.overridden);
   await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);

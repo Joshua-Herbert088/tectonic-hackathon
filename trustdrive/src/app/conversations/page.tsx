@@ -1,16 +1,28 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { AppShell } from "@/components/AppShell";
 import { MESSAGE_SENT, useCompose } from "@/components/Compose";
 import { Avatar } from "@/components/TopBar";
+import { isInternal } from "@/lib/answerDoc";
 import { timeAgo } from "@/lib/time";
 import type { Conversation, Message } from "@/lib/types";
 import { useEscape } from "@/components/useEscape";
 
 const POLL_MS = 4_000;
+
+/** A message kept as the answer to a colleague's question (see answers.ts). */
+interface KeptAnswer {
+  id: number;
+  conversationId: string;
+  questionMessageId: number;
+  answerMessageId: number;
+  askerId: string;
+  topics: string[];
+}
 
 /** The connected mailbox and Teams chats: read them, import more, and turn a selection into a client handover document. */
 export default function ConversationsPage() {
@@ -18,6 +30,7 @@ export default function ConversationsPage() {
   const { clients, clientName, viewerId } = useApp();
   const compose = useCompose();
   const [conversations, setConversations] = useState<Conversation[] | null>(null);
+  const [answers, setAnswers] = useState<KeptAnswer[]>([]);
   const [mineOnly, setMineOnly] = useState(false);
   const [newMenu, setNewMenu] = useState(false);
   useEscape(newMenu, () => setNewMenu(false));
@@ -36,9 +49,10 @@ export default function ConversationsPage() {
     let cancelled = false;
     fetch("/api/conversations")
       .then((r) => r.json())
-      .then((j: { conversations: Conversation[] }) => {
+      .then((j: { conversations: Conversation[]; answers: KeptAnswer[] }) => {
         if (cancelled) return;
         setConversations(j.conversations);
+        setAnswers(j.answers ?? []);
         const params = new URLSearchParams(window.location.search);
         // "?import=1" (the New menu) opens the import dialog once; drop it so the next poll doesn't reopen it.
         if (params.get("import")) {
@@ -200,7 +214,7 @@ export default function ConversationsPage() {
         </aside>
 
         <main className="min-w-0 flex-1 overflow-hidden rounded-2xl bg-white">
-          {open ? <ConversationView key={open.id} c={open} cited={cited?.conversationId === open.id ? cited : null} onSent={() => setReload((n) => n + 1)} /> : <div className="grid h-full place-items-center text-sm text-slate-500">Select a conversation</div>}
+          {open ? <ConversationView key={open.id} c={open} answers={answers.filter((a) => a.conversationId === open.id)} cited={cited?.conversationId === open.id ? cited : null} onSent={() => setReload((n) => n + 1)} /> : <div className="grid h-full place-items-center text-sm text-slate-500">Select a conversation</div>}
         </main>
       </div>
     </AppShell>
@@ -227,8 +241,9 @@ function Author({ m, size = 32 }: { m: Message; size?: number }) {
   );
 }
 
-function ConversationView({ c, cited, onSent }: { c: Conversation; cited: { messageId: number; quote: string } | null; onSent: () => void }) {
+function ConversationView({ c, answers, cited, onSent }: { c: Conversation; answers: KeptAnswer[]; cited: { messageId: number; quote: string } | null; onSent: () => void }) {
   const { clientName, person, viewerId } = useApp();
+  const keptFor = (m: Message) => answers.find((a) => a.answerMessageId === m.id);
   const others = c.participants.filter((p) => p.personId !== viewerId);
   // The cited message in view when arriving from a document; otherwise the newest, also when one arrives.
   const scroller = useRef<HTMLDivElement>(null);
@@ -256,6 +271,7 @@ function ConversationView({ c, cited, onSent }: { c: Conversation; cited: { mess
             {c.importedById && <> · imported by {person(c.importedById)?.name}</>}
             {c.participants.length > 0 && <> · with {c.participants.map((p) => (p.personId === viewerId ? "you" : p.name)).join(", ")}</>}
           </div>
+          {isInternal(c) && <KeepForOthers c={c} kept={answers.length} onChanged={onSent} />}
           {c.source === "email" ? (
             <ol className="space-y-3">
               {c.messages.map((m) => (
@@ -273,6 +289,7 @@ function ConversationView({ c, cited, onSent }: { c: Conversation; cited: { mess
                     <span className="text-[11px] text-slate-500" title={new Date(m.sentAt).toLocaleString()}>{timeAgo(m.sentAt)}</span>
                   </div>
                   <div className="whitespace-pre-wrap text-sm leading-6 text-slate-800">{body(m)}</div>
+                  <KeptChip a={keptFor(m)} />
                 </li>
               ))}
             </ol>
@@ -289,6 +306,7 @@ function ConversationView({ c, cited, onSent }: { c: Conversation; cited: { mess
                         {cited?.messageId === m.id && <CitedTag />}
                       </div>
                       <div className={`mt-0.5 inline-block whitespace-pre-wrap rounded-2xl px-3 py-2 text-left text-sm ${mine ? "rounded-tr-sm bg-[#5b5fc7] text-white" : "rounded-tl-sm bg-[#f0f0fa] text-slate-800"} ${citedRing(m)}`}>{body(m)}</div>
+                      <KeptChip a={keptFor(m)} />
                     </div>
                   </li>
                 );
@@ -298,6 +316,69 @@ function ConversationView({ c, cited, onSent }: { c: Conversation; cited: { mess
         </div>
       </div>
       <Reply c={c} recipients={others} onSent={onSent} />
+    </div>
+  );
+}
+
+/** Under a message kept as an answer: whose question it answered, and where colleagues find it. */
+function KeptChip({ a }: { a?: KeptAnswer }) {
+  const { person, taxonomy } = useApp();
+  if (!a) return null;
+  const topic = taxonomy.mostSpecific(a.topics)[0];
+  const label = topic ? taxonomy.tagLabel(topic) : null;
+  return (
+    <div className="mt-1 text-[11px] text-slate-500">
+      Kept as the answer to {person(a.askerId)?.name.split(" ")[0] ?? "a colleague"}&apos;s question
+      {label && (
+        <>
+          {" "}
+          about{" "}
+          <Link href={`/people?q=${encodeURIComponent(label)}`} className="text-blue-700 hover:underline">
+            {label}
+          </Link>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Whether answers in a chat among colleagues are kept for others. Anyone on it can switch it off, which
+ * removes what was kept; switching it back on looks at the whole conversation again.
+ */
+function KeepForOthers({ c, kept, onChanged }: { c: Conversation; kept: number; onChanged: () => void }) {
+  const { viewerId } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const onIt = c.participants.some((p) => p.personId === viewerId);
+  const set = async (keepPrivate: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/conversations/${c.id}`, { method: "PATCH", body: JSON.stringify({ keepPrivate }) });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not change it.");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      <span className="min-w-0 flex-1">
+        {c.keepPrivate
+          ? "Private: answers in this conversation aren't kept for colleagues."
+          : kept
+            ? `${kept} answer${kept === 1 ? " is" : "s are"} kept for colleagues who ask the same thing, with a link back here.`
+            : "Answers to work questions in this conversation are kept for colleagues who ask the same thing."}
+      </span>
+      {onIt && (
+        <button onClick={() => set(!c.keepPrivate)} disabled={busy} className="shrink-0 rounded-full px-3 py-1 font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50 disabled:opacity-60">
+          {c.keepPrivate ? "Keep answers for colleagues" : "Don't keep for others"}
+        </button>
+      )}
+      {error && <span className="w-full text-red-700">{error}</span>}
     </div>
   );
 }

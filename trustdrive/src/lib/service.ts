@@ -4,7 +4,8 @@ import { relevantPeople } from "./contacts";
 import { buildGovernanceSnapshot } from "./governance";
 import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
-import { documentSources, insertScore, latestScore, latestScoresForViewer, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions } from "./answers";
+import { dismissFaq, documentSources, insertScore, latestScore, latestScoresForViewer, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
 import { GLOBAL, taxonomyOf } from "./taxonomy";
@@ -79,20 +80,24 @@ export async function docDetail(docId: string, viewer: Person) {
   const db = await loadWorld();
   const doc = db.docs.find((d) => d.id === docId);
   if (!doc) return null;
-  const [scores, latest, history, people, sources, governance] = await Promise.all([
+  // Answers from messages sent since the last capture show up on the next visit; the page doesn't wait for Jev.
+  void captureAnswers();
+  const [scores, latest, history, people, sources, governance, answers] = await Promise.all([
     latestScoresForViewer(viewer.id),
     latestScore(doc.id, viewer.id),
     scoreHistory(doc.id, viewer.id),
     relevantPeople(db, doc, viewer),
     documentSources(doc.id),
     buildGovernanceSnapshot(db, doc),
+    loadAnswers(),
   ]);
   return {
     doc,
     trust: freshOrNull(db, doc, viewer, latest),
     history,
     signals: buildSignals(db, doc, viewer),
-    doubts: lineDoubts(db, doc),
+    doubts: lineDoubts(db, doc, Date.now(), answers),
+    answers: answersForDoc(db, doc, answers),
     related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
     people,
@@ -119,19 +124,46 @@ export async function handoverBriefing(predecessorId: string, viewer: Person) {
   };
 }
 
-/** "Who knows X?": colleagues ranked by the evidence on what the question is about. An empty question gets starting points. */
+/** Everything expertise is worked out from, with answers in new messages captured first. */
+async function expertiseInputs() {
+  await captureAnswers();
+  const [db, history, conversations, answers] = await Promise.all([loadWorld(), loadHistory(), loadConversations(), loadAnswers()]);
+  return { db, conversations, answers, ledger: buildLedger(db, history, conversations, answers) };
+}
+
+/** "Who knows X?": colleagues ranked by the evidence on what the question is about, and answers given before. An empty question gets starting points. */
 export async function whoKnowsFor(query: string, viewer: Person) {
-  const [db, history, conversations] = await Promise.all([loadWorld(), loadHistory(), loadConversations()]);
-  if (!query.trim()) return { suggestions: suggestions(db, myClients(viewer, db.clients)) };
-  return whoKnows(db, buildLedger(db, history, conversations), conversations, query, viewer);
+  if (!query.trim()) {
+    const db = await loadWorld();
+    return { suggestions: suggestions(db, myClients(viewer, db.clients)) };
+  }
+  const { db, ledger, conversations, answers } = await expertiseInputs();
+  return whoKnows(db, ledger, conversations, answers, query, viewer);
 }
 
 /** Someone's expertise profile, built from their work; null when there's no such person. */
 export async function personProfile(personId: string, viewer: Person) {
-  const [db, history, conversations] = await Promise.all([loadWorld(), loadHistory(), loadConversations()]);
+  const { db, ledger, conversations, answers } = await expertiseInputs();
   const person = db.people.find((p) => p.id === personId);
   if (!person) return null;
-  return profileOf(db, buildLedger(db, history, conversations), conversations, person, viewer);
+  return profileOf(db, ledger, conversations, answers, person, viewer);
+}
+
+/** The viewer's answers on a topic that aren't written up yet, for turning them into an FAQ. */
+export async function faqDraft(topic: string, viewer: Person) {
+  await captureAnswers();
+  const [db, answers] = await Promise.all([loadWorld(), loadAnswers()]);
+  const tax = taxonomyOf(db.terms);
+  if (!tax.topic.has(topic)) return null;
+  return { topic, label: tax.tagLabel(topic), parent: tax.topic.get(topic)!.parent ?? null, answers: faqAnswers(db, answers, viewer.id, topic) };
+}
+
+/** "Not now": the viewer's answers on this topic stop counting towards an FAQ suggestion. */
+export async function dismissFaqSuggestion(topic: string, viewer: Person) {
+  const [db, answers] = await Promise.all([loadWorld(), loadAnswers()]);
+  const ids = faqAnswers(db, answers, viewer.id, topic).map((a) => a.id);
+  await dismissFaq(ids, viewer.id);
+  return { dismissed: ids.length };
 }
 
 /** What the client asks in the last message of a conversation, when that message is theirs and asks something. */
@@ -227,7 +259,8 @@ export async function clientOverview(clientId: string, viewer: Person) {
  * recently updated documents for them. Trust is filled in by the page.
  */
 export async function homeFor(viewer: Person) {
-  const [db, scores, conversations] = await Promise.all([loadWorld(), latestScoresForViewer(viewer.id), loadConversations()]);
+  await captureAnswers();
+  const [db, scores, conversations, answers] = await Promise.all([loadWorld(), latestScoresForViewer(viewer.id), loadConversations(), loadAnswers()]);
   const live = db.docs.filter((d) => !d.supersededById);
   const row = (d: Doc) => {
     const last = [...d.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
@@ -282,7 +315,10 @@ export async function homeFor(viewer: Person) {
     .slice(0, 8)
     .map(row);
 
-  return { viewer, mine, team, waiting, handovers: [...handovers.values()], impact, fresh };
+  // Questions the viewer keeps answering: worth writing up once instead of answering again.
+  const faqs = faqSuggestions(db, answers, viewer.id);
+
+  return { viewer, mine, team, waiting, handovers: [...handovers.values()], impact, fresh, faqs };
 }
 
 /**

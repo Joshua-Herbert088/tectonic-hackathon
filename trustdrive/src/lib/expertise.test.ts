@@ -37,11 +37,12 @@ describe("who knows", () => {
 
   test("ranks by evidence on the subject, with the country narrowing it down", async () => {
     const r = await experts("overtime in Belgium", jonas);
-    // The Belgian policy's owner moved team; the Dutch policy's author still shows, lower down.
-    expect(r.experts.map((e) => e.personId)).toEqual(["marc", "sanne"]);
-    expect(r.experts[0].caveat).toMatch(/^Moved to HR Operations .* hasn't worked on this since$/);
-    expect(r.experts[0].evidence.map((e) => e.doc?.id)).toContain("overtime-be");
+    // Lotte answered colleagues' overtime questions; the Belgian policy's owner moved team; the Dutch policy's author still shows, lower down.
+    expect(r.experts.map((e) => e.personId)).toEqual(["lotte", "marc", "sanne"]);
     expect(r.experts[0].relevance).toBe(1);
+    const marc = r.experts[1];
+    expect(marc.caveat).toMatch(/^Moved to HR Operations .* hasn't worked on this since$/);
+    expect(marc.evidence.map((e) => e.doc?.id)).toContain("overtime-be");
     // Someone who left is never suggested as a contact, only pointed at.
     expect(r.former.map((f) => f.personId)).toEqual(["pieter"]);
   });
