@@ -13,6 +13,9 @@ jobs:
         working-directory: trustdrive
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The job only reads the code; don't leave the token in .git/config for later steps.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
