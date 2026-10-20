@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Db, Doc, Person, Signal, TrustScore } from "./types";
+import { canSee, HIDDEN_TITLE } from "./access";
 import { coversCountry, formatLocations, isGlobal } from "./appliesTo";
 import { config } from "./config";
 import { LEGAL_TEAM_ID } from "./legal";
@@ -137,7 +138,7 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       supersededBy: superseding ? { title: superseding.title, lastEditedDaysAgo: daysSince(superseding.updatedAt, now) } : undefined,
       savedDespiteConflicts: overridesMade.length
         ? overridesMade.map((o) => ({
-            conflictsWith: o.existingTitle,
+            conflictsWith: secret(o.existingDocId) ? HIDDEN : o.existingTitle,
             thisLine: o.lineText,
             theirLine: secret(o.existingDocId) ? HIDDEN : o.existingLineText,
             overriddenBy: personSummary(db, o.personId, now),
@@ -147,7 +148,7 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
         : undefined,
       contradictedByOverriddenDocuments: overridesAgainst.length
         ? overridesAgainst.map((o) => ({
-            document: db.docs.find((d) => d.id === o.docId)?.title,
+            document: secret(o.docId) ? HIDDEN : db.docs.find((d) => d.id === o.docId)?.title,
             thisLine: o.existingLineText,
             theirLine: secret(o.docId) ? HIDDEN : o.lineText,
             overriddenBy: personSummary(db, o.personId, now),
@@ -169,7 +170,7 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       const v = latest(currentVerifications(r));
       const owner = db.people.find((p) => p.id === r.ownerId);
       return {
-        title: r.title,
+        title: r.confidential ? HIDDEN : r.title,
         status: r.status,
         appliesTo: r.locations,
         lastEditedDaysAgo: daysSince(r.updatedAt, now),
@@ -317,7 +318,10 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
   const person = (id: string | null | undefined) => db.people.find((p) => p.id === id);
   const teamName = (id?: string) => db.teams.find((t) => t.id === id)?.name ?? "another team";
   const owner = person(doc.ownerId);
-  const related = relatedDocs(db, doc);
+  // Other documents are named only when the viewer may see them.
+  const visible = (id: string | undefined) => { const d = db.docs.find((x) => x.id === id); return !d || canSee(d, viewer); };
+  const titleOf = (id: string | undefined, title: string) => (visible(id) ? title : HIDDEN_TITLE);
+  const related = relatedDocs(db, doc).filter((r) => canSee(r, viewer));
 
   // Ownership
   if (!owner) out.push({ tone: "bad", text: "No owner – nobody is accountable for keeping this document correct" });
@@ -374,7 +378,7 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
   // Superseded / newer related
   if (doc.supersededById) {
     const s = db.docs.find((d) => d.id === doc.supersededById);
-    if (s) out.push({ tone: "bad", text: `Superseded by “${s.title}” (edited ${timeAgo(s.updatedAt, now)})` });
+    if (s) out.push({ tone: "bad", text: `Superseded by “${titleOf(s.id, s.title)}” (edited ${timeAgo(s.updatedAt, now)})` });
   } else {
     const newer = related.find(
       (r) => r.status !== "WIP" && new Date(r.updatedAt) > new Date(doc.updatedAt) && daysSince(doc.updatedAt, now) > 180 && r.tags.some((t) => doc.tags.includes(t) && t !== "policy"),
@@ -386,11 +390,11 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
 
   // Conflicts someone chose to override
   for (const o of db.overrides.filter((o) => o.docId === doc.id)) {
-    out.push({ tone: "warn", text: `Saved despite a conflict with “${o.existingTitle}” (line ${o.existingLineNo}) – overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
+    out.push({ tone: "warn", text: `Saved despite a conflict with “${titleOf(o.existingDocId, o.existingTitle)}” (line ${o.existingLineNo}) – overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
   }
   for (const o of db.overrides.filter((o) => o.existingDocId === doc.id)) {
     const other = db.docs.find((d) => d.id === o.docId);
-    out.push({ tone: "warn", text: `“${other?.title ?? "Another document"}” contradicts line ${o.existingLineNo} – conflict overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
+    out.push({ tone: "warn", text: `“${other ? titleOf(other.id, other.title) : "Another document"}” contradicts line ${o.existingLineNo} – conflict overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
   }
 
   // Old years mentioned as current

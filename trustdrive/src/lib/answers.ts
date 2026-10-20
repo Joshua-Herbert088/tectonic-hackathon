@@ -134,7 +134,8 @@ async function toAnswer(db: Db, c: { id: string }, x: Exchange, sharing: Answer[
   const question = redact(x.questionText).text;
   const content = redact(x.answerLines.join("\n")).text;
   const { topics, locations, clientId, method } = await topicsAndPlace(db, question, content, answerer);
-  const check = await checkConflicts(db, { title: question, content, locations, teamId: answerer?.teamId ?? db.teams[0].id });
+  // A shared answer is shown to everyone, so it's only compared with documents everyone may see.
+  const check = await checkConflicts({ ...db, docs: db.docs.filter((d) => !d.confidential) }, { title: question, content, locations, teamId: answerer?.teamId ?? db.teams[0].id });
   // Only clear contradictions: a short answer next to a document is "possibly" in conflict too often to be useful.
   const worst = check.hard[0];
   return {

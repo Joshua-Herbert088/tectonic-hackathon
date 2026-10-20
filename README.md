@@ -68,7 +68,9 @@ Uploading has a **Contains confidential information** switch, which can also be 
 - its trust score is the rule-based estimate (labelled as such),
 - conflict and duplicate checks decide every pair that involves it with the rules, in both directions: when it's saved, and when another document is compared with it,
 - tag suggestions for it come from the keyword rules,
-- other documents' trust inputs leave out its excerpt and its lines in conflict overrides.
+- other documents' trust inputs leave out its title, excerpt and its lines in conflict overrides.
+
+Only its **owner, collaborators and the readers it was shared with** can see it (`src/lib/access.ts`). For anyone else it's left out of the drive, search, the home page, client pages, handovers and related documents, and opening, scoring, verifying or editing it is a 404. A conflict with it still blocks a save, but is shown as *a confidential document you don't have access to*, without its title, line or owner; overriding it still tells the owner. Shared answers are only compared with documents that aren't confidential. In the demo, the salary register is confidential (An, Lotte and Eva).
 
 `src/lib/confidential.test.ts` checks this against a stand-in for Jev.
 
@@ -340,7 +342,7 @@ Migrations run on startup; with `MIGRATE_ON_START=false`, run them separately wi
 ### Suggested demo
 1. Sign in with the access code. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
 2. Open *Overtime policy – Belgium*. Switch to Marc (the owner), click **I confirm this document is correct**, and watch it rescore.
-3. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`. It's blocked because it conflicts with the salary register. Override it with a reason, then switch to An Claes and open the bell.
+3. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`. It's blocked because it conflicts with the salary register (shown as *a confidential document* unless you're An, Lotte or Eva). Override it with a reason, then switch to An Claes and open the bell.
 4. Upload `samples/multilingual/planning-paie-decembre-fr.md` (French, conflicts with an English deadline sheet) and `samples/multilingual/maladie-salaire-garanti-fr.md` (a French translation of an existing document, so you get the duplicate warning).
 5. Open *Clocking terminal troubleshooting guide*, then *Clocking terminals – quick fixes (CS copy)*. You'll see the "you just saw this" banner.
 6. Open **Handover radar** in the sidebar (or the tab in the drive) and reassign a document whose owner left.
@@ -396,7 +398,7 @@ trustdrive/
 ## Unfinished / known limitations
 
 **Not a real product yet**
-- **One shared access code, no per-person login or permissions.** Anyone with the code can be anyone: "Viewing as" is a user switcher and anyone can edit any document's content. The status, tags, countries, teams, client and confidentiality are limited to the owner and collaborators, handing a document over to its owner (or, once it needs a new owner, its team, collaborators and suggested successors), and verifying to the people accountable for it. There's no admin screen: people are added to the `people` table with SQL.
+- **One shared access code, no per-person login or permissions.** Anyone with the code can be anyone: "Viewing as" is a user switcher and anyone can edit the content of any document they can see (all but other people's confidential ones). The status, tags, countries, teams, client and confidentiality are limited to the owner and collaborators, handing a document over to its owner (or, once it needs a new owner, its team, collaborators and suggested successors), and verifying to the people accountable for it. There's no admin screen: people are added to the `people` table with SQL.
 - **No real Google Drive integration.** Documents live in TrustDrive's own Postgres database.
 - **Uploads are text only** (`.md` / `.txt`). No PDF, Word or spreadsheet parsing; "sheet" and "pdf" are only icons.
 - **Missing drive features:** sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.

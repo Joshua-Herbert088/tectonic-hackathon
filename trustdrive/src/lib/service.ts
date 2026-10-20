@@ -1,3 +1,4 @@
+import { canSee, HIDDEN_TITLE, redactConflicts } from "./access";
 import { buildBriefing } from "./briefing";
 import { checkConflicts, type Draft } from "./conflicts";
 import { relevantPeople } from "./contacts";
@@ -38,7 +39,7 @@ export function computeScore(docId: string, viewer: Person): Promise<TrustScore 
   const p = (async () => {
     const db = await loadWorld();
     const doc = db.docs.find((d) => d.id === docId);
-    if (!doc) return null;
+    if (!doc || !canSee(doc, viewer)) return null;
     const state = buildJevState(db, doc, viewer);
     const inputHash = hashState(state);
     // Confidential content never goes to Jev; rule scores aren't stored, like any other fallback.
@@ -76,14 +77,17 @@ function summary(db: Db, doc: Doc, viewer: Person, stored: TrustScore | null | u
 
 export async function listDocs(viewer: Person) {
   const [db, scores] = await Promise.all([loadWorld(), latestScoresForViewer(viewer.id)]);
-  const docs = [...db.docs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((d) => summary(db, d, viewer, scores.get(d.id)));
+  const docs = db.docs.filter((d) => canSee(d, viewer)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((d) => summary(db, d, viewer, scores.get(d.id)));
   return { viewer, docs, folders: db.folders };
 }
 
+/** Everything the document page shows; null when there's no such document or the viewer may not see it. */
 export async function docDetail(docId: string, viewer: Person) {
   const db = await loadWorld();
   const doc = db.docs.find((d) => d.id === docId);
-  if (!doc) return null;
+  if (!doc || !canSee(doc, viewer)) return null;
+  // The other side of a conflict decision, unless it's a document the viewer may not see.
+  const shown = (id: string) => canSee(db.docs.find((d) => d.id === id) ?? { confidential: false, ownerId: null, collaboratorIds: [], readerIds: [] }, viewer);
   // Answers from messages sent since the last capture show up on the next visit; the page doesn't wait for Jev.
   void captureAnswers();
   const [scores, latest, history, people, sources, governance, answers] = await Promise.all([
@@ -101,9 +105,11 @@ export async function docDetail(docId: string, viewer: Person) {
     trust: freshOrNull(db, doc, viewer, latest),
     history,
     signals: buildSignals(db, doc, viewer),
-    doubts: lineDoubts(db, doc, Date.now(), shared),
+    doubts: lineDoubts(db, doc, Date.now(), shared, viewer),
     answers: answersForDoc(db, doc, shared),
-    related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
+    related: relatedDocs(db, doc)
+      .filter((r) => canSee(r, viewer))
+      .map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
     people,
     client: db.clients.find((c) => c.id === doc.clientId) ?? null,
@@ -111,8 +117,10 @@ export async function docDetail(docId: string, viewer: Person) {
     sources,
     governance,
     conflictDecisions: {
-      made: db.overrides.filter((o) => o.docId === doc.id),
-      against: db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => ({ ...o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId })),
+      made: db.overrides.filter((o) => o.docId === doc.id).map((o) => (shown(o.existingDocId) ? o : { ...o, existingDocId: "", existingTitle: HIDDEN_TITLE, existingLineText: "" })),
+      against: db.overrides
+        .filter((o) => o.existingDocId === doc.id)
+        .map((o) => (shown(o.docId) ? { ...o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId } : { ...o, docId: "", lineText: "", reason: "", docTitle: HIDDEN_TITLE })),
     },
   };
 }
@@ -125,7 +133,7 @@ export async function handoverBriefing(predecessorId: string, viewer: Person) {
   const [scores, briefing] = await Promise.all([latestScoresForViewer(viewer.id), buildBriefing(db, predecessor, viewer)]);
   return {
     ...briefing,
-    docs: briefing.docs.map((d) => ({ ...d, doc: { ...d.doc, trust: freshOrNull(db, db.docs.find((x) => x.id === d.doc.id)!, viewer, scores.get(d.doc.id)) } })),
+    docs: briefing.docs.filter((d) => canSee(db.docs.find((x) => x.id === d.doc.id)!, viewer)).map((d) => ({ ...d, doc: { ...d.doc, trust: freshOrNull(db, db.docs.find((x) => x.id === d.doc.id)!, viewer, scores.get(d.doc.id)) } })),
   };
 }
 
@@ -188,7 +196,7 @@ export async function whoKnowsFor(query: string, viewer: Person) {
   }
   const [{ db, ledger, conversations, shared }, scores] = await Promise.all([expertiseInputs(), latestScoresForViewer(viewer.id)]);
   const { documentIds, ...result } = whoKnows(db, ledger, conversations, shared, query, viewer);
-  return { ...result, documents: documentIds.map((id) => db.docs.find((d) => d.id === id)!).map((d) => summary(db, d, viewer, scores.get(d.id))) };
+  return { ...result, documents: documentIds.map((id) => db.docs.find((d) => d.id === id)!).filter((d) => canSee(d, viewer)).map((d) => summary(db, d, viewer, scores.get(d.id))) };
 }
 
 /** A shared answer on its own page (or the viewer's own, waiting one); null when there's none they may see. */
@@ -245,7 +253,7 @@ export async function clientOverview(clientId: string, viewer: Person) {
   const [db, scores, allConversations] = await Promise.all([loadWorld(), latestScoresForViewer(viewer.id), loadConversations()]);
   const client = db.clients.find((c) => c.id === clientId);
   if (!client) return null;
-  const live = db.docs.filter((d) => !d.supersededById);
+  const live = db.docs.filter((d) => !d.supersededById && canSee(d, viewer));
   const row = (d: Doc) => summary(db, d, viewer, scores.get(d.id));
 
   const about = live.filter((d) => d.clientId === client.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -266,7 +274,13 @@ export async function clientOverview(clientId: string, viewer: Person) {
   const inScope = new Set(about.map((d) => d.id));
   const exceptions = db.overrides
     .filter((o) => inScope.has(o.docId) || inScope.has(o.existingDocId))
-    .map((o) => ({ override: o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId }))
+    .map((o) => {
+      // The other side may be a document the viewer can't see: then without its title and lines.
+      const hidden = (id: string) => db.docs.some((d) => d.id === id && !canSee(d, viewer));
+      if (hidden(o.existingDocId)) return { override: { ...o, existingDocId: "", existingTitle: HIDDEN_TITLE, existingLineText: "" }, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId };
+      if (hidden(o.docId)) return { override: { ...o, docId: "", lineText: "", reason: "" }, docTitle: HIDDEN_TITLE };
+      return { override: o, docTitle: db.docs.find((d) => d.id === o.docId)?.title ?? o.docId };
+    })
     .sort((a, b) => b.override.at.localeCompare(a.override.at));
 
   const conversations = allConversations
@@ -319,7 +333,7 @@ export async function clientOverview(clientId: string, viewer: Person) {
 export async function homeFor(viewer: Person) {
   await captureAnswers();
   const [db, scores, conversations, answers] = await Promise.all([loadWorld(), latestScoresForViewer(viewer.id), loadConversations(), loadAnswers()]);
-  const live = db.docs.filter((d) => !d.supersededById);
+  const live = db.docs.filter((d) => !d.supersededById && canSee(d, viewer));
   const row = (d: Doc) => {
     const last = [...d.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
     return { ...summary(db, d, viewer, scores.get(d.id)), role: d.ownerId === viewer.id ? "owner" : "collaborator", lastVerifiedAt: last?.at ?? null };
@@ -439,7 +453,7 @@ export function requireTags(db: Db, content: string, tags: string[]) {
 export async function editDocument(viewer: Person, id: string, body: z.infer<typeof documentPatch>): Promise<{ status: number; body: Record<string, unknown> }> {
   const world = await loadWorld();
   const doc = world.docs.find((d) => d.id === id);
-  if (!doc) throw new HttpError(404, "Not found");
+  if (!doc || !canSee(doc, viewer)) throw new HttpError(404, "Not found");
   if (body.title !== undefined && !body.title.trim()) throw new HttpError(400, "A document needs a name.");
   const patch = {
     title: body.title?.trim(),
@@ -475,10 +489,10 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
   if (contentChanged) {
     const [g, similar] = await Promise.all([
       gateDraft(world, { title, content, locations: patch.locations ?? doc.locations, teamId: doc.teamId, docId: doc.id, previousContent: doc.content, confidential }, body.override),
-      substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content, confidential }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar }),
+      substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content, confidential }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar, viewer }),
     ]);
-    if (!g.ok) return { status: g.status, body: { ...g.body, similar } };
-    if (similar.length) return { status: 409, body: { error: "similar", similar, check: g.check } };
+    if (!g.ok) return { status: g.status, body: { ...g.body, ...(g.body.check ? { check: redactConflicts(world, g.body.check as ConflictCheck, viewer) } : {}), similar } };
+    if (similar.length) return { status: 409, body: { error: "similar", similar, check: redactConflicts(world, g.check, viewer) } };
     gate = g;
   }
 
@@ -489,7 +503,7 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
     await recordOverrides(id, viewer.id, reason, gate.overridden);
     await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
   }
-  return { status: 200, body: { ...(await docDetail(id, viewer)), conflictCheck: gate?.ok ? gate.check : null } };
+  return { status: 200, body: { ...(await docDetail(id, viewer)), conflictCheck: gate?.ok ? redactConflicts(world, gate.check, viewer) : null } };
 }
 
 export type GateResult =
@@ -517,10 +531,11 @@ export async function gateDraft(db: Db, draft: Draft, override: unknown): Promis
  * Warn-only redundancy check for content being added. Returns [] when there's nothing to add yet,
  * the user already acknowledged the warning, or Jev is unavailable (it must never block saving).
  */
-export async function redundancyCheck(db: Db, text: { title: string; content: string; confidential?: boolean }, opts: { excludeDocId?: string; acknowledged?: unknown }): Promise<SimilarDoc[]> {
+export async function redundancyCheck(db: Db, text: { title: string; content: string; confidential?: boolean }, opts: { excludeDocId?: string; acknowledged?: unknown; viewer: Person }): Promise<SimilarDoc[]> {
   if (opts.acknowledged === true || !substance(text.content)) return [];
   try {
-    return await findRedundant(db, text, opts.excludeDocId);
+    // Only documents the viewer may see: a warning names them.
+    return await findRedundant({ ...db, docs: db.docs.filter((d) => canSee(d, opts.viewer)) }, text, opts.excludeDocId);
   } catch {
     return [];
   }

@@ -27,7 +27,10 @@ beforeEach(() => {
 
 describe("confidential documents never reach Jev", () => {
   test("without the flag, the same checks do ask Jev (so the stand-in is wired up)", async () => {
-    await checkConflicts(buildSeed(), draft);
+    // The seeded salary register is confidential; without that flag it would be sent.
+    const db = buildSeed();
+    db.docs.find((d) => d.id === "salary-register-be")!.confidential = false;
+    await checkConflicts(db, draft);
     expect(sent.join("")).toContain("Salary register");
   });
 

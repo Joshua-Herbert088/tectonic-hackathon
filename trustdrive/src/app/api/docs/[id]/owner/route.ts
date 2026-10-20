@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { visibleDoc } from "@/lib/access";
 import { requireViewer } from "@/lib/auth";
 import { findPerson, loadWorld, transferOwnership } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
@@ -10,8 +11,7 @@ export const POST = handle(async (req, ctx: RouteContext<"/api/docs/[id]/owner">
   const viewer = await requireViewer(req);
   const { ownerId } = await readBody(req, z.object({ ownerId: z.string() }));
   const world = await loadWorld();
-  const doc = world.docs.find((d) => d.id === id);
-  if (!doc) throw new HttpError(404, "Not found");
+  const doc = visibleDoc(world, id, viewer);
   if (!mayReassign(world, doc, viewer)) throw new HttpError(403, "Only the owner can hand this document over. Once it needs a new owner, its team and collaborators can too.");
   const next = await findPerson({ id: ownerId });
   if (!next?.active) throw new HttpError(400, "New owner must be an active colleague");

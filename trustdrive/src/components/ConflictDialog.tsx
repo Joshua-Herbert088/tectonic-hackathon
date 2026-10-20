@@ -151,6 +151,22 @@ export function ConflictDialog({
 
 function ConflictCard({ c, onEditMine, onEditExisting }: { c: Conflict; onEditMine: () => void; onEditExisting: () => void }) {
   const { person, teamName } = useApp();
+  // A confidential document the viewer may not see: the server sends no id, title or text.
+  if (!c.existing.docId) {
+    return (
+      <div className="rounded-2xl border border-[#f4c7c3] bg-[#fffbfa] p-4">
+        <div className="rounded-xl bg-white p-3 ring-1 ring-slate-200">
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">Your document · line {c.lineNo}</div>
+          <div className="text-sm text-slate-900">{c.lineText}</div>
+        </div>
+        <p className="mt-3 text-sm text-slate-700">This line contradicts a confidential document you don&apos;t have access to. Check it with its owner, or save anyway with a reason – they&apos;ll be told.</p>
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs text-[#c5221f]">{Math.round(c.probability * 100)}% likely a direct contradiction</span>
+          <button onClick={onEditMine} className="rounded-full px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50">Fix my line</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="rounded-2xl border border-[#f4c7c3] bg-[#fffbfa] p-4">
       <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-3">

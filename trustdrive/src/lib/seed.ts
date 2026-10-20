@@ -500,6 +500,8 @@ Copied from the Time team guide so we have it at hand during customer calls.
       location: "Belgium",
       status: "Completed",
       teamId: "pay-be",
+      // Everyone's salary: only An, Lotte and Eva may see it.
+      confidential: true,
       tags: ["salary", "compensation", "payroll-processing"],
       createdAt: ago(270),
       updatedAt: ago(10),

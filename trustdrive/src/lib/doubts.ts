@@ -1,7 +1,8 @@
+import { canSee, HIDDEN_TITLE, redactConflicts } from "./access";
 import { checkConflicts, extractFacts } from "./conflicts";
 import { stripLinks } from "./lexicon";
 import { timeAgo } from "./time";
-import type { AnswerView, Db, Doc, Doubt } from "./types";
+import type { AnswerView, Db, Doc, Doubt, Person } from "./types";
 
 /** A markdown line as the reader sees it. */
 function plain(line: string) {
@@ -16,7 +17,9 @@ function plain(line: string) {
  * Stored overrides and answers are matched on the line's text, since the document may have been edited
  * since; if the line is gone, so is the doubt.
  */
-export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerView[] = []): Doubt[] {
+export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerView[] = [], viewer?: Person): Doubt[] {
+  // The other side of an override is named only when the viewer may see it.
+  const hidden = (d: Doc | undefined) => !!d && !!viewer && !canSee(d, viewer);
   // Link addresses (source citations) aren't text: their ids must not look like years.
   const lines = stripLinks(doc.content).split("\n");
   const name = (id: string) => db.people.find((p) => p.id === id)?.name ?? "someone";
@@ -41,8 +44,8 @@ export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerVi
       lineText: plain(lines[lineNo - 1]),
       tone: "warn",
       kind: "override",
-      text: `Saved despite contradicting “${o.existingTitle}” – ${name(o.personId)} overrode it ${timeAgo(o.at, now)}: “${o.reason}”`,
-      source: other && { ...sourceOf(other), lineNo: o.existingLineNo, lineText: o.existingLineText },
+      text: `Saved despite contradicting “${hidden(other) ? HIDDEN_TITLE : o.existingTitle}” – ${name(o.personId)} overrode it ${timeAgo(o.at, now)}: “${o.reason}”`,
+      source: other && !hidden(other) ? { ...sourceOf(other), lineNo: o.existingLineNo, lineText: o.existingLineText } : undefined,
     });
   }
   for (const o of db.overrides.filter((o) => o.existingDocId === doc.id)) {
@@ -55,8 +58,8 @@ export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerVi
       lineText: plain(lines[lineNo - 1]),
       tone: "bad",
       kind: "override",
-      text: `“${other.title}” says otherwise – ${name(o.personId)} saved it anyway ${timeAgo(o.at, now)}`,
-      source: { ...sourceOf(other), lineNo: o.lineNo, lineText: o.lineText },
+      text: `“${hidden(other) ? HIDDEN_TITLE : other.title}” says otherwise – ${name(o.personId)} saved it anyway ${timeAgo(o.at, now)}`,
+      source: hidden(other) ? undefined : { ...sourceOf(other), lineNo: o.lineNo, lineText: o.lineText },
     });
   }
   for (const a of answers.filter((a) => a.conflict?.docId === doc.id)) {
@@ -76,8 +79,9 @@ export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerVi
 }
 
 /** Lines Jev (or the conflict rules, without Jev) finds contradicting other documents. Slow (Jev calls), so fetched separately from the page. */
-export async function contradictionDoubts(db: Db, doc: Doc): Promise<Doubt[]> {
-  const check = await checkConflicts(db, { title: doc.title, content: doc.content, locations: doc.locations, teamId: doc.teamId, docId: doc.id, confidential: doc.confidential });
+export async function contradictionDoubts(db: Db, doc: Doc, viewer: Person): Promise<Doubt[]> {
+  // Contradictions with documents the viewer may not see still show, without what they say.
+  const check = redactConflicts(db, await checkConflicts(db, { title: doc.title, content: doc.content, locations: doc.locations, teamId: doc.teamId, docId: doc.id, confidential: doc.confidential }), viewer);
   // Conflicts already overridden against this document are shown by lineDoubts.
   const known = new Set(db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => `${o.docId}|${o.lineText}`));
   // Shown as the reader sees it: source citations without their link addresses.
@@ -91,7 +95,8 @@ export async function contradictionDoubts(db: Db, doc: Doc): Promise<Doubt[]> {
       tone: c.severity === "hard" ? ("bad" as const) : ("warn" as const),
       kind: "contradiction" as const,
       text: `${c.severity === "hard" ? "Contradicts" : "May contradict"} “${c.existing.title}” (${check.method === "rules" ? "conflict rules" : `${Math.round(c.probability * 100)}% sure`})`,
-      source: c.existing,
+      // No source for a document the viewer may not see (redacted: no id).
+      source: c.existing.docId ? c.existing : undefined,
     }));
 }
 

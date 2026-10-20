@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
+import { redactConflicts } from "@/lib/access";
 import { requireViewer } from "@/lib/auth";
 import { createDocument, loadWorld, markAnswersInFaq, recordOverrides } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { notifyOverrides } from "@/lib/notify";
 import { limitWrites } from "@/lib/rateLimit";
 import { newDocument } from "@/lib/schemas";
+import type { ConflictCheck } from "@/lib/types";
 import { checkAppliesTo, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
 
 export const GET = handle(async (req) => Response.json(await listDocs(await requireViewer(req))));
@@ -34,10 +36,11 @@ export const POST = handle(async (req) => {
 
   const [gate, similar] = await Promise.all([
     gateDraft(world, { title, content: body.content, locations, teamId, confidential: body.confidential }, body.override),
-    redundancyCheck(world, { title, content: body.content, confidential: body.confidential }, { acknowledged: body.acknowledgeSimilar }),
+    redundancyCheck(world, { title, content: body.content, confidential: body.confidential }, { acknowledged: body.acknowledgeSimilar, viewer }),
   ]);
-  if (!gate.ok) return Response.json({ ...gate.body, similar }, { status: gate.status });
-  if (similar.length) return Response.json({ error: "similar", similar, check: gate.check }, { status: 409 });
+  // Conflicts with documents the viewer may not see still block, without saying what those say.
+  if (!gate.ok) return Response.json({ ...gate.body, ...(gate.body.check ? { check: redactConflicts(world, gate.body.check as ConflictCheck, viewer) } : {}), similar }, { status: gate.status });
+  if (similar.length) return Response.json({ error: "similar", similar, check: redactConflicts(world, gate.check, viewer) }, { status: 409 });
 
   const now = new Date().toISOString();
   const id = `doc-${crypto.randomUUID()}`;
@@ -50,5 +53,5 @@ export const POST = handle(async (req) => {
   const reason = body.override?.reason ?? "";
   await recordOverrides(id, viewer.id, reason, gate.overridden);
   await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
-  return Response.json({ id, conflictCheck: gate.check });
+  return Response.json({ id, conflictCheck: redactConflicts(world, gate.check, viewer) });
 });

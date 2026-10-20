@@ -1,3 +1,4 @@
+import { canSee, redactConflicts } from "@/lib/access";
 import { requireViewer } from "@/lib/auth";
 import { checkConflicts } from "@/lib/conflicts";
 import { loadWorld } from "@/lib/db";
@@ -13,7 +14,8 @@ export const POST = handle(async (req) => {
   limitWrites(viewer.id);
   const body = await readBody(req, conflictDraft);
   const world = await loadWorld();
-  const existing = world.docs.find((d) => d.id === body.docId);
+  // A document the viewer may not see is treated as unknown.
+  const existing = world.docs.find((d) => d.id === body.docId && canSee(d, viewer));
   const check = await checkConflicts(world, {
     title: body.title ?? existing?.title ?? "",
     content: body.content,
@@ -24,5 +26,5 @@ export const POST = handle(async (req) => {
     // A confidential document stays confidential here: its text must not reach Jev because a request said otherwise.
     confidential: !!existing?.confidential || !!body.confidential,
   });
-  return Response.json(check);
+  return Response.json(redactConflicts(world, check, viewer));
 });
