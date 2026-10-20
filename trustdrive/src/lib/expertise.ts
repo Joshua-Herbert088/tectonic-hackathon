@@ -1,5 +1,5 @@
-import { isInternal } from "./answerDoc";
-import { faqSuggestions, publicHref, viewOf, withLiveConflicts } from "./answers";
+import { isInternal, publicHref } from "./answerDoc";
+import { faqSuggestions, viewOf, withLiveConflicts } from "./answers";
 import { isGlobal } from "./appliesTo";
 import { blame } from "./diff";
 import { fold } from "./lexicon";

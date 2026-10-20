@@ -178,7 +178,7 @@ async function resolveOpenItems(open: Statement[], all: Conversation[], method: 
 }
 
 /** Where the drive already states this: the same fact and value, or (without figures) most of the same words on one line. */
-function documentedIn(db: Db, text: string, client: { name: string; location: string }, clientId?: string): DraftItem["documentedIn"] {
+export function documentedIn(db: Db, text: string, client: { name: string; location: string }, clientId?: string): DraftItem["documentedIn"] {
   const docs = db.docs.filter((d) => !d.supersededById).sort((a, b) => Number(b.clientId === clientId) - Number(a.clientId === clientId));
   const facts = extractFacts(text);
   for (const doc of docs) {

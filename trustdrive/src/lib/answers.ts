@@ -1,6 +1,7 @@
-import { isInternal } from "./answerDoc";
+import { isInternal, publicHref } from "./answerDoc";
 import { overlaps } from "./appliesTo";
 import { checkConflicts, extractFacts } from "./conflicts";
+import { draftEdits } from "./edits";
 import { answerProgress, deleteAnswers, insertAnswers, insertNotifications, loadAnswers, loadBoard, loadConversations, loadWorld, setAnswersThrough, setAnswerSharing, setPersonSharing, type NewAnswer } from "./db";
 import { citationHref } from "./handoverDoc";
 import { redact, ruleKind, statementsOf } from "./handoverDraft";
@@ -25,8 +26,9 @@ import type { Answer, AnswerConflict, AnswerView, BoardThread, Conversation, Db,
  * Answers are quoted, never rewritten. Left out: conversations marked "Don't keep for others", and
  * exchanges with personal data, health information or a colleague's full name in them. Each answer gets
  * topics (Jev or the keyword rules) and goes through the conflict check against the drive; once it's
- * shared, a contradiction shows on the document and its owner is told. Someone who answered the same
- * topic three times is offered to write it up as an FAQ.
+ * shared, a contradiction shows on the document and its owner is told, and the change it suggests to the
+ * document is drafted (edits.ts). Someone who answered the same topic three times is offered to write it
+ * up as an FAQ.
  */
 
 /** Ends with a question mark (an emoji after it is fine). */
@@ -190,7 +192,7 @@ async function run() {
     const isNew = (id: string, msgs: Message[]) => msgs.length > 0 && (progress.get(id)?.through ?? 0) < lastId(msgs);
     const chats = conversations.filter((c) => isInternal(c) && !c.keepPrivate && isNew(c.id, c.messages));
     const threads = board.filter((t) => isNew(t.id, [t.question, ...t.replies]));
-    if (!chats.length && !threads.length) return;
+    if (!chats.length && !threads.length) return await draftEdits();
     const [db, existing] = await Promise.all([loadWorld(), loadAnswers()]);
     const askedBefore = new Set(existing.map((a) => a.questionMessageId));
     const answeredBefore = new Set(existing.map((a) => a.answerMessageId));
@@ -214,6 +216,8 @@ async function run() {
       const fresh = boardExchanges(t, db.people).filter((x) => !x.skipped && !answeredBefore.has(x.answers[0].id));
       await store(t.id, await Promise.all(fresh.map((x) => toAnswer(db, t, x, "shared"))), lastId([t.question, ...t.replies]));
     }
+    // Shared answers that say something a document doesn't: draft the change for the person who answered.
+    await draftEdits();
   } catch (e) {
     // Background work: a failure is retried on the next call, since nothing was marked as done.
     log.error("capturing answers failed", { error: (e as Error).message });
@@ -253,6 +257,7 @@ export async function decideSharing(viewer: Person, answerIds: number[], share: 
   if (share) {
     await setAnswerSharing(chosen.map((a) => a.id), viewer.id, "shared");
     await notifyContradictions(db, chosen);
+    await draftEdits();
   } else await deleteAnswers(chosen.map((a) => a.id), viewer.id);
   return { decided: chosen.length };
 }
@@ -266,8 +271,6 @@ export async function setSharingPreference(viewer: Person, preference: "ask" | "
 /** Only shared answers count anywhere; waiting ones are only for the person who gave them. */
 export const sharedOnly = (answers: Answer[]) => answers.filter((a) => a.sharing === "shared");
 
-/** The page where anyone can read a shared answer: its board thread, or its own page for a private chat. */
-export const publicHref = (a: Pick<Answer, "id" | "source" | "conversationId" | "answerMessageId">) => (a.source === "board" ? `/board/${a.conversationId}#m${a.answerMessageId}` : `/board/answers/${a.id}`);
 
 /**
  * An answer as `viewer` may see it. From a private chat, only the people on it see who asked and can open

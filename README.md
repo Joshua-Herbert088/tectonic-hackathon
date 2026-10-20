@@ -153,6 +153,22 @@ In the demo:
 - On the board, Sofie's absence-code question was solved by Wout, and Emma's vakantiegeld question has an answer. Jonas's year-end bonus question has gone unanswered for three days, so opening **Ask** asks the next colleagues.
 - Two chats are never kept: one is private, the other is about a named colleague's salary.
 
+### Documents updated from answers
+When a shared answer says something a document doesn't, TrustDrive drafts the change to the document. A person still decides (`src/lib/edits.ts`, `src/components/SuggestedEdits.tsx`):
+- **Two kinds of change:**
+  - **The answer contradicts a line:** where it's clear which figure changed, only that figure is swapped ("max **100** hours per calendar year" becomes "max **120** hours…"), picked by the words around it. Otherwise the line becomes the answer's sentence. Table rows only get a figure swapped, never a sentence.
+  - **The answer isn't written down anywhere yet:** it's added to the document on the same sub-topic and country, quoted, as a Q&A in an FAQ or a bullet elsewhere.
+
+  Every changed or added line links to where the answer was given. Drafting needs no Jev: Jev answers with scores and yes/no, not text, so changes are exact swaps and quotes.
+- **The person who answered proposes it:** they get *Your answers could keep documents up to date* on **For you**, plus a bell notification. They can reword it, **Suggest to** the owner, or say it's **Not needed**.
+- **The document's owner decides:** *Suggested changes to your documents* on **For you** and on the document's **Why** tab show the old line struck through and the new one. **Accept and save** goes through the usual checks (conflicts, duplicates, edit history, notifications), so the trust score updates like after any edit. **Reject** takes an optional reason, which the person who answered sees.
+- **Shortcuts and safety:**
+  - When the person who answered owns the document, or nobody active does, one click applies it.
+  - A suggestion for a line that has been edited since isn't offered any more and can't be applied.
+  - Answers waiting to be shared suggest nothing until they're shared.
+
+In the demo, Lotte's answer ("max 120 hours per calendar year now") is drafted as a change to Marc's outdated overtime policy, and Sanne's board answer about the 13th month as a line for Lars's vakantiegeld document. Switch to Lotte, suggest it to Marc, then switch to Marc and accept it. The policy updates, the contradiction disappears and its trust score is recalculated.
+
 ### Mentoring (buddy system)
 A newcomer gets a mentor, who can quietly keep an eye on where they're getting stuck and step in: *Jonas keeps asking about GDPR and his searches find nothing, so let's sit down about how Legal works.* Nobody is notified; the mentor checks in when they choose (`src/lib/mentoring.ts`, `src/app/mentoring/`).
 - **Assigning a mentor:** on anyone's profile (**Mentor → Assign a mentor / Change / Remove**), or on **Mentoring** (sidebar) with **Mentor someone**. Someone can't mentor themselves, mentor someone who mentors them, or be mentored by someone who left.
@@ -343,6 +359,7 @@ trustdrive/
   src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no, or the rules without Jev)
   src/lib/conflict-cases.ts  hand-labelled conflict pairs used by the tests and the Jev eval
   src/lib/briefing.ts      handover briefing
+  src/lib/edits.ts         changes answers suggest to documents: drafted, proposed by whoever answered, accepted by the owner
   src/lib/legal.ts         the Legal & Compliance badge: who in Legal validated a document, and when
   src/lib/quiet.ts         "nobody has looked at this in a year" notices (opens are recorded in document_opens)
   src/lib/mentoring.ts     mentoring: a mentee's questions, searches and reading by department, and where they struggle

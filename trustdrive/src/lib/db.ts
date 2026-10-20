@@ -14,7 +14,7 @@ import { log } from "./log";
 import { buildBoard, buildConversations, buildSeed, seedActivity, seedHistory } from "./seed";
 import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
 import { formatLocations } from "./appliesTo";
-import type { ActivityEvent, Answer, BoardThread, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
+import type { ActivityEvent, Answer, BoardThread, SuggestedEdit, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
 
 /**
  * Database access. Postgres everywhere: any Postgres server when DATABASE_URL is set, otherwise
@@ -197,7 +197,7 @@ async function syncSeed(orm: Orm) {
 export async function resetDb() {
   const orm = await db();
   await orm.transaction(async (tx) => {
-    for (const t of [schema.documentOpens, schema.activity, schema.notifications, schema.answers, schema.boardThreads, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+    for (const t of [schema.documentOpens, schema.activity, schema.notifications, schema.suggestedEdits, schema.answers, schema.boardThreads, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
       await tx.delete(t);
     }
   });
@@ -723,7 +723,7 @@ export async function loadAnswers(): Promise<Answer[]> {
     .innerJoin(schema.conversations, eq(schema.answers.conversationId, schema.conversations.id))
     .leftJoin(schema.boardThreads, eq(schema.boardThreads.conversationId, schema.answers.conversationId))
     .orderBy(desc(schema.answers.answeredAt));
-  return rows.map(({ a: { createdAt: _created, ...a }, title, source, participants, solved }) => ({
+  return rows.map(({ a: { createdAt: _created, editsCheckedAt: _checked, ...a }, title, source, participants, solved }) => ({
     ...a,
     conversationTitle: title,
     source,
@@ -734,6 +734,37 @@ export async function loadAnswers(): Promise<Answer[]> {
     faqDocId: a.faqDocId ?? undefined,
     faqDismissedAt: a.faqDismissedAt ?? undefined,
   }));
+}
+
+/** Shared answers not yet checked for changes they suggest to documents. */
+export async function answersToCheckForEdits() {
+  const rows = await (await db()).select({ id: schema.answers.id }).from(schema.answers).where(and(eq(schema.answers.sharing, "shared"), isNull(schema.answers.editsCheckedAt)));
+  return rows.map((r) => r.id);
+}
+
+export async function markEditsChecked(answerIds: number[]) {
+  if (!answerIds.length) return;
+  await (await db()).update(schema.answers).set({ editsCheckedAt: new Date().toISOString() }).where(inArray(schema.answers.id, answerIds));
+}
+
+export type NewSuggestedEdit = Omit<typeof schema.suggestedEdits.$inferInsert, "id" | "createdAt">;
+
+export async function insertSuggestedEdits(rows: NewSuggestedEdit[]) {
+  if (!rows.length) return [];
+  const now = new Date().toISOString();
+  return (await db()).insert(schema.suggestedEdits).values(rows.map((r) => ({ ...r, createdAt: now }))).returning({ id: schema.suggestedEdits.id, answerId: schema.suggestedEdits.answerId });
+}
+
+/** Suggested edits, newest first; all of them, or only some. */
+export async function loadSuggestedEdits(by: { ids?: number[]; docId?: string } = {}): Promise<SuggestedEdit[]> {
+  const q = (await db()).select().from(schema.suggestedEdits);
+  const where = by.ids ? inArray(schema.suggestedEdits.id, by.ids.length ? by.ids : [-1]) : by.docId ? eq(schema.suggestedEdits.docId, by.docId) : undefined;
+  const rows = await (where ? q.where(where) : q).orderBy(desc(schema.suggestedEdits.createdAt), desc(schema.suggestedEdits.id));
+  return rows.map((r) => ({ ...r, oldLine: r.oldLine ?? undefined, decidedAt: r.decidedAt ?? undefined, decidedById: r.decidedById ?? undefined, reason: r.reason ?? undefined }));
+}
+
+export async function updateSuggestedEdit(id: number, patch: Partial<Pick<SuggestedEdit, "status" | "newLine" | "reason" | "decidedById" | "decidedAt">>) {
+  await (await db()).update(schema.suggestedEdits).set(patch).where(eq(schema.suggestedEdits.id, id));
 }
 
 /** Answers someone gave that are now written up in a document. Only their own answers are changed. */

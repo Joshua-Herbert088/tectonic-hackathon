@@ -8,6 +8,8 @@ import { useApp } from "@/components/AppContext";
 import { FaqSuggestions } from "@/components/FaqSuggestions";
 import { Icon } from "@/components/Icons";
 import { ShareAnswers } from "@/components/ShareAnswers";
+import { SuggestedEdits } from "@/components/SuggestedEdits";
+import type { EditView } from "@/lib/edits";
 import { ConfidentialPill } from "@/components/StatusPill";
 import { LegalBadge } from "@/components/LegalBadge";
 import { Avatar } from "@/components/TopBar";
@@ -54,6 +56,19 @@ function HomeView({ viewerId }: { viewerId: string }) {
   const [showAll, setShowAll] = useState(false);
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [edits, setEdits] = useState<{ toPropose: EditView[]; toReview: EditView[] } | null>(null);
+
+  // Changes answers suggest to documents: ones to review (as owner), and the viewer's own to propose.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/edits")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => !cancelled && j && setEdits(j))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [reload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -148,6 +163,22 @@ function HomeView({ viewerId }: { viewerId: string }) {
 
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] [&>*]:min-w-0">
           <div className="space-y-6">
+            {edits && (
+              <SuggestedEdits
+                edits={edits.toReview}
+                onDone={() => setReload((n) => n + 1)}
+                title="Suggested changes to your documents"
+                note="Colleagues' answers say something your documents don't. Accept to save the change (checked like any edit), or reject it."
+              />
+            )}
+            {edits && (
+              <SuggestedEdits
+                edits={edits.toPropose}
+                onDone={() => setReload((n) => n + 1)}
+                title="Your answers could keep documents up to date"
+                note="Drafted from what you answered. Suggest it to the document's owner (you can reword it first), or say it isn't needed."
+              />
+            )}
             {data.toShare.length > 0 && <ShareAnswers answers={data.toShare} onDone={() => setReload((n) => n + 1)} />}
             {data.faqs.length > 0 && <FaqSuggestions faqs={data.faqs} onDismissed={() => setReload((n) => n + 1)} />}
             <Card

@@ -142,6 +142,22 @@ export interface AnswerView extends Omit<Answer, "askerId" | "participantIds"> {
   canOpen: boolean;
 }
 
+/** A change an answer suggests to a document (see edits.ts). */
+export interface SuggestedEdit {
+  id: number;
+  answerId: number;
+  docId: string;
+  kind: "replace" | "add";
+  /** For a replacement: the line as it was. */
+  oldLine?: string;
+  newLine: string;
+  status: "draft" | "proposed" | "accepted" | "rejected" | "dismissed";
+  createdAt: string;
+  decidedAt?: string;
+  decidedById?: string;
+  reason?: string;
+}
+
 /** A question on the message board, with its answers (the thread's later messages). */
 export interface BoardThread {
   id: string;

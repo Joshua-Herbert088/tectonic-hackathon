@@ -166,6 +166,8 @@ let lastJev: { ok: boolean; at: number; reason?: string } | null = null;
 /** Whether Jev answered the last time it was asked (unknown until the first call). */
 export function jevStatus() {
   if (config.jev.disabled) return { available: false, reason: "turned off (JEV_DISABLED=1)" };
+  // Without a key every call falls back to the rules, so the banner has to say so from the start.
+  if (!config.jev.apiKey) return { available: false, reason: "has no API key (JEV_API_KEY isn't set)" };
   return lastJev ? { available: lastJev.ok, reason: lastJev.reason } : { available: true };
 }
 

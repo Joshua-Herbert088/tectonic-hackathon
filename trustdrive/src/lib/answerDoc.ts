@@ -1,6 +1,9 @@
-import type { AnswerView, Conversation } from "./types";
+import type { Answer, AnswerView, Conversation } from "./types";
 
 /** The parts of answers.ts that pages need too; pure, so they run in the browser as well. */
+
+/** The page where anyone can read a shared answer: its board thread, or its own page for a private chat. */
+export const publicHref = (a: Pick<Answer, "id" | "source" | "conversationId" | "answerMessageId">) => (a.source === "board" ? `/board/${a.conversationId}#m${a.answerMessageId}` : `/board/answers/${a.id}`);
 
 /** Only conversations among colleagues have their answers kept: client conversations have their own handover documents. */
 export const isInternal = (c: Pick<Conversation, "clientId" | "participants">) => !c.clientId && c.participants.length > 1 && c.participants.every((p) => !!p.personId);

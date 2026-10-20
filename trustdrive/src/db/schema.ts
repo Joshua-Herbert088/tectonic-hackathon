@@ -251,9 +251,11 @@ export const notifications = pgTable(
      * answer: an answer contradicts your document (otherDocId is the answer's id, otherDocTitle and reason
      * the question) · question: you're asked to answer a board question (docId is the thread, reason why
      * you) · board_answer: someone answered your board question · share: your answer in a chat could help
-     * others (docId is the conversation, otherDocId the answer's id)
+     * others (docId is the conversation, otherDocId the answer's id) · suggestion_draft: your answer could
+     * change a document (docId) · suggestion: someone suggests a change to your document · suggestion_decided:
+     * the owner accepted or rejected your suggestion (reason says which, and why)
      */
-    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message" | "answer" | "question" | "board_answer" | "share">().notNull(),
+    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message" | "answer" | "question" | "board_answer" | "share" | "suggestion" | "suggestion_draft" | "suggestion_decided">().notNull(),
     /** The document the recipient's information lives in (for messages: the conversation). */
     docId: text("doc_id").notNull(),
     docTitle: text("doc_title").notNull(),
@@ -348,6 +350,8 @@ export const answers = pgTable(
     faqDocId: text("faq_doc_id").references(() => documents.id, { onDelete: "set null" }),
     /** The person who answered chose not to write it up (for now). */
     faqDismissedAt: text("faq_dismissed_at"),
+    /** When it was checked for changes it suggests to a document (see edits.ts). */
+    editsCheckedAt: text("edits_checked_at"),
     createdAt: text("created_at").notNull(),
   },
   // A board question can have several answers; a chat question has one (its answer's first message).
@@ -370,3 +374,29 @@ export const boardThreads = pgTable("board_threads", {
   /** The answer the asker marked as solving it. */
   solvedMessageId: integer("solved_message_id").references(() => messages.id, { onDelete: "set null" }),
 });
+
+/**
+ * A change an answer suggests to a document: a line it contradicts, rewritten, or a line to add (see
+ * edits.ts). The person who answered proposes it; the document's owner accepts or rejects it.
+ */
+export const suggestedEdits = pgTable(
+  "suggested_edits",
+  {
+    id: serial("id").primaryKey(),
+    answerId: integer("answer_id").notNull().references(() => answers.id, { onDelete: "cascade" }),
+    docId: text("doc_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<"replace" | "add">().notNull(),
+    /** For a replacement: the line as it was, to find it again (the document may have changed since). */
+    oldLine: text("old_line"),
+    /** The line as suggested, then as proposed or accepted (people can edit it). */
+    newLine: text("new_line").notNull(),
+    /** draft: for the person who answered to propose · proposed: for the owner · then accepted, rejected or dismissed. */
+    status: text("status").$type<"draft" | "proposed" | "accepted" | "rejected" | "dismissed">().notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedAt: text("decided_at"),
+    decidedById: text("decided_by_id").references(() => people.id),
+    /** Why it was rejected, if someone said. */
+    reason: text("reason"),
+  },
+  (t) => [index("suggested_edits_doc_idx").on(t.docId), index("suggested_edits_answer_idx").on(t.answerId)],
+);

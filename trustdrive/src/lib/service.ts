@@ -5,7 +5,10 @@ import { buildGovernanceSnapshot } from "./governance";
 import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions, sharedOnly, viewOf, withLiveConflicts } from "./answers";
-import { dismissFaq, documentSources, insertScore, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import type { z } from "zod";
+import { notifyEdit, notifyOverrides } from "./notify";
+import type { documentPatch } from "./schemas";
+import { dismissFaq, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
@@ -402,6 +405,54 @@ export function requireTags(db: Db, content: string, tags: string[]) {
   if (!substance(content)) return;
   const missing = taxonomyOf(db.terms).missingTags(tags);
   if (missing.length) throw new HttpError(400, `Tag the document before saving it: add ${missing.join(" and ")}.`);
+}
+
+/**
+ * Saves changes to a document, as the document editor does. Content edits go through the conflict gate
+ * (409 on hard conflicts unless overridden); metadata edits don't. Filling a still-empty document is
+ * treated like an upload and also gets the redundancy warning. Authors of lines that were changed – or
+ * contradicted by an override – are notified. Returns the status and body to respond with.
+ */
+export async function editDocument(viewer: Person, id: string, body: z.infer<typeof documentPatch>): Promise<{ status: number; body: Record<string, unknown> }> {
+  const world = await loadWorld();
+  const doc = world.docs.find((d) => d.id === id);
+  if (!doc) throw new HttpError(404, "Not found");
+  if (body.title !== undefined && !body.title.trim()) throw new HttpError(400, "A document needs a name.");
+  const patch = {
+    title: body.title?.trim(),
+    content: body.content,
+    status: body.status,
+    ...checkAppliesTo(world, body.locations, body.audienceTeamIds),
+    tags: body.tags ? [...new Set(body.tags)] : undefined,
+    clientId: body.clientId === null || world.clients.some((c) => c.id === body.clientId) ? body.clientId : undefined,
+    confidential: body.confidential,
+  };
+  const confidential = patch.confidential ?? !!doc.confidential;
+  const title = patch.title ?? doc.title;
+  const content = patch.content ?? doc.content;
+
+  const contentChanged = content !== doc.content || title !== doc.title;
+  // Saving content (a new document's first save, or any edit of one that was never tagged) needs tags.
+  if (contentChanged) requireTags(world, content, patch.tags ?? doc.tags);
+  let gate: GateResult | null = null;
+  if (contentChanged) {
+    const [g, similar] = await Promise.all([
+      gateDraft(world, { title, content, locations: patch.locations ?? doc.locations, teamId: doc.teamId, docId: doc.id, previousContent: doc.content, confidential }, body.override),
+      substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content, confidential }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar }),
+    ]);
+    if (!g.ok) return { status: g.status, body: { ...g.body, similar } };
+    if (similar.length) return { status: 409, body: { error: "similar", similar, check: g.check } };
+    gate = g;
+  }
+
+  if (contentChanged) await notifyEdit(world, doc, title, content, viewer.id);
+  await updateDocument(id, viewer.id, patch);
+  if (gate?.ok) {
+    const reason = body.override?.reason ?? "";
+    await recordOverrides(id, viewer.id, reason, gate.overridden);
+    await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
+  }
+  return { status: 200, body: { ...(await docDetail(id, viewer)), conflictCheck: gate?.ok ? gate.check : null } };
 }
 
 export type GateResult =

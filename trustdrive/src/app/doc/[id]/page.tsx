@@ -7,6 +7,8 @@ import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
 import { useCompose } from "@/components/Compose";
 import { AnswerCard } from "@/components/Expertise";
+import { SuggestedEdits } from "@/components/SuggestedEdits";
+import type { EditView } from "@/lib/edits";
 import { FileIcon } from "@/components/FileIcon";
 import { Icon } from "@/components/Icons";
 import { Markdown, type LineMark } from "@/components/Markdown";
@@ -112,6 +114,28 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
     },
     [rescore],
   );
+
+  // Changes answers suggest to this document, waiting for someone to propose or accept them.
+  const [edits, setEdits] = useState<EditView[]>([]);
+  const [editsReload, setEditsReload] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/edits?doc=${encodeURIComponent(id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => !cancelled && j && setEdits(j.pending))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id, editsReload]);
+  /** After a suggestion was decided: the document may have changed, so load it again. */
+  const editDecided = () => {
+    setEditsReload((n) => n + 1);
+    fetch(`/api/docs/${id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: Detail | null) => d?.doc && apply(d))
+      .catch(() => {});
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -455,6 +479,11 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
           <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {tab === "why" && (
               <>
+                {edits.length > 0 && (
+                  <div className="border-b border-slate-100 p-3">
+                    <SuggestedEdits edits={edits} onDone={editDecided} title={`Suggested change${edits.length === 1 ? "" : "s"} from answers`} />
+                  </div>
+                )}
                 <section className="border-b border-slate-100 p-5">
                   {bad.length > 0 && (
                     <>
