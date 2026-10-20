@@ -15,7 +15,7 @@ import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
 import { GLOBAL, taxonomyOf } from "./taxonomy";
 import { ruleKind, statementsOf } from "./handoverDraft";
-import { buildJevState, buildSignals, fallbackScore, hashState, relatedDocs, scoreWithJev } from "./trust";
+import { buildJevState, buildSignals, fallbackScore, hashState, limitToRead, relatedDocs, scoreWithJev } from "./trust";
 import { isGlobal } from "./appliesTo";
 import { myClients } from "./clients";
 import { HttpError } from "./http";
@@ -24,7 +24,7 @@ import type { ConflictCheck, Conversation, Db, Doc, Person, TrustScore } from ".
 
 /** A stored score only counts if Jev's inputs haven't changed since it was computed. */
 function freshOrNull(db: Db, doc: Doc, viewer: Person, stored: TrustScore | null | undefined) {
-  return stored && stored.inputHash === hashState(buildJevState(db, doc, viewer)) ? stored : null;
+  return stored && stored.inputHash === hashState(buildJevState(db, doc, viewer)) ? limitToRead(doc, stored) : null;
 }
 
 // Coalesce concurrent requests for the same doc/viewer.
@@ -51,7 +51,8 @@ export function computeScore(docId: string, viewer: Person): Promise<TrustScore 
       // Not stored, so the next request asks Jev again.
       return { ...fallbackScore(db, doc, viewer, (e as Error).message), inputHash };
     }
-    const result = { ...jev, inputHash };
+    // Capped before it's stored: Jev didn't read all of a long document.
+    const result = limitToRead(doc, { ...jev, inputHash });
     await insertScore(doc.id, viewer.id, result);
     return result;
   })().finally(() => inflight.delete(key));

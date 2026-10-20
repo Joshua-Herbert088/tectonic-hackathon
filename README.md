@@ -22,6 +22,7 @@ The home page lists what needs the person viewing it: documents they own or work
   - when it was last edited and last verified, and by whom
   - how much it's been used recently
   - whether a newer document replaced it
+  - the first 6,000 characters of the text. A longer document scores at most 60 (*probably reliable*) and says only part of it was assessed, since text nobody read can't make it reliable; text past the limit is still reported (size, years mentioned) and an edit there triggers a rescore.
   - up to 4 related documents: ones that share tags or title words, apply to a country in common (and not another client), and come from the people accountable for it (the team that maintains it, its owner or a collaborator) or supersede it. Anyone else's upload with copied tags never counts as "a newer version" or "a draft" of it, whatever countries it claims. A document can only be linked to a client its creator or editor works with.
   - conflicts that were overridden (see below)
   - the reader's role, team and location

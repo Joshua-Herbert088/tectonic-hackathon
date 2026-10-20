@@ -21,6 +21,18 @@ const MAX_CONTENT_CHARS = 6000;
 const MAX_RELATED_EXCERPT = 700;
 
 /**
+ * Jev reads the first MAX_CONTENT_CHARS characters of a document. One it couldn't read in full scores at
+ * most this (level 3, "probably reliable"): text nobody assessed can't make it reliable or authoritative.
+ */
+export const PARTIAL_MAX_SCORE = 60;
+/** Whether Jev reads all of a document's text. */
+export const readInFull = (doc: Pick<Doc, "content">) => stripLinks(doc.content).length <= MAX_CONTENT_CHARS;
+/** A score as it may be shown for this document: capped when part of it wasn't read (PARTIAL_MAX_SCORE). */
+export function limitToRead<T extends { score: number }>(doc: Pick<Doc, "content">, s: T): T {
+  return readInFull(doc) || s.score <= PARTIAL_MAX_SCORE ? s : { ...s, score: PARTIAL_MAX_SCORE };
+}
+
+/**
  * Verifications of the document as it reads now. One given before the last edit confirmed other text,
  * so it doesn't vouch for this version.
  */
@@ -313,7 +325,7 @@ export function fallbackScore(db: Db, doc: Doc, viewer: Person, reason: string, 
   else if (lastVerified > 30 || viewer.teamId !== doc.teamId) level = 4;
   else level = 5;
 
-  return {
+  return limitToRead(doc, {
     score: Math.round((level / (TRUST_LEVELS.length - 1)) * 100),
     confidence: 0.5,
     levelProbabilities: Object.fromEntries(TRUST_LEVELS.map((_, i) => [String(i), i === level ? 1 : 0])),
@@ -321,7 +333,7 @@ export function fallbackScore(db: Db, doc: Doc, viewer: Person, reason: string, 
     computedAt: new Date().toISOString(),
     latencyMs: Date.now() - started,
     fallback: opts.confidential ? { reason, confidential: true } : { reason },
-  };
+  });
 }
 
 /** Human-readable good/bad facts, derived directly from metadata (independent of Jev's score). */
@@ -408,6 +420,9 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
     const other = db.docs.find((d) => d.id === o.docId);
     out.push({ tone: "warn", text: `“${other ? titleOf(other.id, other.title) : "Another document"}” contradicts line ${o.existingLineNo} – conflict overridden by ${person(o.personId)?.name ?? "someone"} ${timeAgo(o.at, now)}` });
   }
+
+  // Text Jev didn't read
+  if (!readInFull(doc)) out.push({ tone: "warn", text: `Long document: only the first ${MAX_CONTENT_CHARS.toLocaleString("en")} characters were assessed, so its trust is capped – check the rest yourself` });
 
   // Old years mentioned as current
   const year = new Date(now).getFullYear();

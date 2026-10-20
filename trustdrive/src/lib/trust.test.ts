@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { closeDb, loadWorld, migrateAndSeed } from "./db";
-import { buildJevState, buildSignals, currentVerifications, fallbackScore, hashState, mayVerify, relatedDocs } from "./trust";
+import { buildJevState, buildSignals, currentVerifications, fallbackScore, hashState, limitToRead, mayVerify, PARTIAL_MAX_SCORE, relatedDocs } from "./trust";
 import type { Db, Doc, Person } from "./types";
 
 // A throwaway in-memory Postgres (PGLITE_DIR=memory:// in vitest.config.ts), migrated and seeded.
@@ -127,5 +127,33 @@ describe("long content", () => {
     expect(hashState(stateA)).not.toBe(hashState(buildJevState(withDoc(b), b, jonas)));
     // Short documents send everything and say nothing extra.
     expect(buildJevState(world, base, jonas).document.contentNotShown).toBeUndefined();
+  });
+
+  test("a document Jev couldn't read in full scores at most 'probably reliable', and says why", () => {
+    const jonas = person("jonas");
+    // Everything right: Jonas's own, current, completed, verified today, for his country and team.
+    const ideal: Doc = {
+      ...doc("overtime-be"),
+      id: "ideal",
+      content: "# Procedure\n\nSteps that are fine.",
+      ownerId: jonas.id,
+      teamId: jonas.teamId,
+      locations: [jonas.location],
+      audienceTeamIds: [],
+      status: "Completed",
+      collaboratorIds: [],
+      updatedAt: days(1),
+      verifications: [{ personId: jonas.id, at: days(0) }],
+      supersededById: undefined,
+    };
+    const long = { ...ideal, content: `${ideal.content}\n${"More steps that look fine.\n".repeat(400)}` };
+    expect(fallbackScore(withDoc(ideal), ideal, jonas, "test").score).toBeGreaterThan(PARTIAL_MAX_SCORE);
+    expect(fallbackScore(withDoc(long), long, jonas, "test").score).toBe(PARTIAL_MAX_SCORE);
+    // A score Jev gave (or one stored before the cap) is capped too when it's shown.
+    expect(limitToRead(long, { score: 95 }).score).toBe(PARTIAL_MAX_SCORE);
+    expect(limitToRead(ideal, { score: 95 }).score).toBe(95);
+    const warning = (d: Doc) => buildSignals(withDoc(d), d, jonas).find((x) => x.text.startsWith("Long document"));
+    expect(warning(long)).toMatchObject({ tone: "warn" });
+    expect(warning(ideal)).toBeUndefined();
   });
 });
