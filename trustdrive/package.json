@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "demo": "node scripts/demo.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
