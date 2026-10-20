@@ -61,7 +61,7 @@ Every upload and every text edit is checked against **all** existing documents (
 When a save is blocked, a dialog shows your line next to the conflicting line. You can:
 - **fix your own line**,
 - **fix the existing document** in place, or
-- **override with a reason**. The override is stored permanently on both documents (`conflict_overrides` table) and fed into the trust score.
+- **override with a reason**. Only someone who may edit the document being saved can (or whoever uploads a new one), and the reason must be a sentence (10+ characters). The override is stored permanently on both documents (`conflict_overrides` table) against the person who signed in, logged with how they signed in (their own code or a demo session), and fed into the trust score.
 
 ### Confidential documents
 Uploading has a **Contains confidential information** switch, which can also be changed later in a document's Details tab. A confidential document is marked with a red *Confidential* badge wherever it's listed, and its content is **never sent to Jev**:

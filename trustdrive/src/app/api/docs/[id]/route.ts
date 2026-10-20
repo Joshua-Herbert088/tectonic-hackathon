@@ -1,4 +1,4 @@
-import { requireViewer, sessionId } from "@/lib/auth";
+import { requireViewer, sessionId, signedInAs } from "@/lib/auth";
 import { deleteDocumentForever, loadTrash, recordActivity, recordOpen } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
@@ -34,6 +34,8 @@ export const PATCH = handle(async (req, ctx: Ctx) => {
   const patch = await readBody(req, documentPatch);
   limitWrites(viewer.id, await sessionId(), (patch.title?.length ?? 0) + (patch.content?.length ?? 0));
   const { status, body } = await withSaveSlot(viewer.id, () => editDocument(viewer, id, patch));
+  const overridden = (body.conflictCheck as { hard?: unknown[] } | null | undefined)?.hard?.length ?? 0;
+  if (status === 200 && patch.override?.reason && overridden) log.info("saved over hard conflicts", { docId: id, by: viewer.id, signedInAs: await signedInAs(), conflicts: overridden, reason: patch.override.reason });
   return Response.json(body, { status });
 });
 

@@ -8,7 +8,7 @@ import { findRedundant, substance, type SimilarDoc } from "./similarity";
 import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions, sharedOnly, viewOf, withLiveConflicts } from "./answers";
 import type { z } from "zod";
 import { notifyEdit, notifyOverrides } from "./notify";
-import type { documentPatch } from "./schemas";
+import { MIN_OVERRIDE_REASON, type documentPatch } from "./schemas";
 import { charsWrittenBy, dismissFaq, storedChars, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
@@ -529,7 +529,7 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
   let gate: GateResult | null = null;
   if (contentChanged) {
     const [g, similar] = await Promise.all([
-      gateDraft(world, { title, content, locations: patch.locations ?? doc.locations, teamId: doc.teamId, docId: doc.id, previousContent: doc.content, confidential }, body.override),
+      gateDraft(world, { title, content, locations: patch.locations ?? doc.locations, teamId: doc.teamId, docId: doc.id, previousContent: doc.content, confidential }, body.override, viewer),
       substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content, confidential }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar, viewer }),
     ]);
     if (!g.ok) return { status: g.status, body: { ...g.body, ...(g.body.check ? { check: redactConflicts(world, g.body.check as ConflictCheck, viewer) } : {}), similar } };
@@ -553,10 +553,13 @@ export type GateResult =
   | { ok: false; status: number; body: Record<string, unknown> };
 
 /**
- * Hard conflicts block a save unless the person explicitly overrides them with a reason.
- * The caller records `overridden` against the saved document.
+ * Hard conflicts block a save unless the person explicitly overrides them, which needs both:
+ * - the right to: someone who may edit the document being saved (mayEditContent), or the person
+ *   uploading a new one – the override is recorded against them, and its owner is told;
+ * - a written reason of at least MIN_OVERRIDE_REASON characters.
+ * The caller records `overridden` against the saved document, with `actor` as who decided.
  */
-export async function gateDraft(db: Db, draft: Draft, override: unknown): Promise<GateResult> {
+export async function gateDraft(db: Db, draft: Draft, override: unknown, actor: Person): Promise<GateResult> {
   let check: ConflictCheck;
   try {
     check = await checkConflicts(db, draft);
@@ -566,6 +569,9 @@ export async function gateDraft(db: Db, draft: Draft, override: unknown): Promis
   if (!check.hard.length) return { ok: true, check, overridden: [] };
   const reason = typeof (override as { reason?: unknown })?.reason === "string" ? (override as { reason: string }).reason.trim() : "";
   if (!reason) return { ok: false, status: 409, body: { error: "conflicts", check } };
+  const doc = draft.docId ? db.docs.find((d) => d.id === draft.docId) : undefined;
+  if (draft.docId && (!doc || !mayEditContent(doc, actor))) return { ok: false, status: 403, body: { error: "Only someone who may edit this document can save it over a conflict.", check } };
+  if (reason.length < MIN_OVERRIDE_REASON) return { ok: false, status: 400, body: { error: `Say why in a sentence (at least ${MIN_OVERRIDE_REASON} characters): it stays on both documents.`, check } };
   return { ok: true, check, overridden: check.hard };
 }
 

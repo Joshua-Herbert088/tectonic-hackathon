@@ -55,7 +55,7 @@ describe("confidential documents", () => {
   test("a conflict with it still blocks, but without its title, line or owner", async () => {
     // The demo upload: blocked because it contradicts the salary register (README, demo step 3).
     const sample = fs.readFileSync(path.join(__dirname, "../../samples/salary-review-jonas-maes.md"), "utf8");
-    const gate = await gateDraft(world, { title: "Salary review – Jonas Maes", content: sample, locations: ["Belgium"], teamId: "pay-be" }, undefined);
+    const gate = await gateDraft(world, { title: "Salary review – Jonas Maes", content: sample, locations: ["Belgium"], teamId: "pay-be" }, undefined, person("jonas"));
     if (gate.ok) throw new Error("the demo upload should be blocked");
     const check = gate.body.check as ConflictCheck;
     expect(check.hard.some((c) => c.existing.docId === REGISTER)).toBe(true);

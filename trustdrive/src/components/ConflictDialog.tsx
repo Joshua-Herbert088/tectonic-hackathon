@@ -1,6 +1,7 @@
 "use client";
 
 import { formatLocations } from "@/lib/appliesTo";
+import { MIN_OVERRIDE_REASON } from "@/lib/schemas";
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./AppContext";
 import { timeAgo } from "@/lib/time";
@@ -109,11 +110,11 @@ export function ConflictDialog({
                 placeholder="e.g. Raise approved by An on 28 Sep – register will be updated next week"
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-[#c5221f]"
               />
-              <p className="text-xs text-slate-500">Your name, this reason and the conflicting lines will stay attached to the document, and appear on the other document too.</p>
+              <p className="text-xs text-slate-500">Your name, this reason and the conflicting lines will stay attached to the document, and appear on the other document too. A sentence at least.</p>
               <div className="flex justify-end gap-2">
                 <button onClick={() => setOverriding(false)} className="rounded-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-100">Back</button>
                 <button
-                  disabled={!reason.trim() || busy}
+                  disabled={reason.trim().length < MIN_OVERRIDE_REASON || busy}
                   onClick={() => onOverride(reason.trim())}
                   className="rounded-full bg-[#c5221f] px-5 py-2 text-sm font-medium text-white hover:bg-[#a50e0e] disabled:opacity-40"
                 >

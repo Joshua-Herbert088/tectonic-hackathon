@@ -9,7 +9,9 @@ export const location = z.string().trim().min(1).max(60);
 const locations = z.array(location).min(1, "Pick at least one country, or Global.").max(20);
 const audienceTeamIds = z.array(z.string()).max(30);
 export const status = z.enum(STATUSES as [string, ...string[]]).transform((s) => s as (typeof STATUSES)[number]);
-/** "Save anyway" for hard conflicts: needs a written reason. */
+/** Shortest reason accepted for saving over a hard conflict: a sentence, not a keystroke. */
+export const MIN_OVERRIDE_REASON = 10;
+/** "Save anyway" for hard conflicts: needs a written reason (see gateDraft). */
 export const override = z.object({ reason: z.string().trim().max(2000) }).optional();
 const text = (max: number) => z.string().max(max);
 

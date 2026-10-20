@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import type { z } from "zod";
 import { redactConflicts } from "@/lib/access";
-import { requireViewer, sessionId } from "@/lib/auth";
+import { requireViewer, sessionId, signedInAs } from "@/lib/auth";
 import { createDocument, loadWorld, markAnswersInFaq, recordOverrides } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
+import { log } from "@/lib/log";
 import { notifyOverrides } from "@/lib/notify";
 import { limitWrites, withSaveSlot } from "@/lib/rateLimit";
 import { newDocument } from "@/lib/schemas";
@@ -21,10 +22,11 @@ export const POST = handle(async (req) => {
   const viewer = await requireViewer(req);
   const body = await readBody(req, newDocument);
   limitWrites(viewer.id, await sessionId(), (body.title?.length ?? 0) + body.content.length);
-  return withSaveSlot(viewer.id, () => create(viewer, body));
+  const actor = await signedInAs();
+  return withSaveSlot(viewer.id, () => create(viewer, body, actor));
 });
 
-async function create(viewer: Person, body: z.infer<typeof newDocument>) {
+async function create(viewer: Person, body: z.infer<typeof newDocument>, signedIn: string) {
   const world = await loadWorld();
   const title = body.title?.trim() ?? "";
   if (!title) throw new HttpError(400, "Give the document a name.");
@@ -40,7 +42,7 @@ async function create(viewer: Person, body: z.infer<typeof newDocument>) {
   const folderId = world.folders.some((f) => f.id === body.folderId) ? body.folderId : undefined;
 
   const [gate, similar] = await Promise.all([
-    gateDraft(world, { title, content: body.content, locations, teamId, confidential: body.confidential }, body.override),
+    gateDraft(world, { title, content: body.content, locations, teamId, confidential: body.confidential }, body.override, viewer),
     redundancyCheck(world, { title, content: body.content, confidential: body.confidential }, { acknowledged: body.acknowledgeSimilar, viewer }),
   ]);
   // Conflicts with documents the viewer may not see still block, without saying what those say.
@@ -58,6 +60,7 @@ async function create(viewer: Person, body: z.infer<typeof newDocument>) {
   await markAnswersInFaq(body.answerIds, viewer.id, id);
   const reason = body.override?.reason ?? "";
   await recordOverrides(id, viewer.id, reason, gate.overridden);
+  if (gate.overridden.length) log.info("saved over hard conflicts", { docId: id, by: viewer.id, signedInAs: signedIn, conflicts: gate.overridden.length, reason });
   await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
   return Response.json({ id, conflictCheck: redactConflicts(world, gate.check, viewer) });
 }

@@ -5,5 +5,5 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
   // Tests never call the paid Jev API (they exercise the rule-based fallbacks) and use a throwaway
   // in-memory Postgres.
-  test: { include: ["src/**/*.test.ts"], env: { JEV_DISABLED: "1", PGLITE_DIR: "memory://", NODE_ENV: "test" } },
+  test: { include: ["src/**/*.test.ts"], env: { JEV_DISABLED: "1", PGLITE_DIR: "memory://", NODE_ENV: "test", TRUSTDRIVE_SECRET: "a test secret that is at least thirty-two characters" } },
 });

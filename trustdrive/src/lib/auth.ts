@@ -28,6 +28,16 @@ export async function sessionId(): Promise<string> {
   return session.sessionId;
 }
 
+/**
+ * Who actually signed in: a person's id, or DEMO_USER for a demo session viewing as someone. Logged next
+ * to decisions such as conflict overrides, which are stored against the person the drive is viewed as.
+ */
+export async function signedInAs(): Promise<string> {
+  const session = await currentSession();
+  if (!session) throw new HttpError(401, "Sign in to TrustDrive first.");
+  return session.userId;
+}
+
 /** Whether this session may view the drive as someone else: only a demo session, in demo mode. */
 export async function canSwitchViewer() {
   return (await currentSession())?.userId === DEMO_USER;
