@@ -157,6 +157,19 @@ export const activity = pgTable(
   (t) => [index("activity_person_idx").on(t.personId, t.at)],
 );
 
+/**
+ * When a document was last opened, and by whom, plus the open before that (so reopening it straight
+ * away still shows how long it had been). Jev never sees this: a quiet document is shown as such,
+ * but its score doesn't change.
+ */
+export const documentOpens = pgTable("document_opens", {
+  docId: text("doc_id").primaryKey().references(() => documents.id, { onDelete: "cascade" }),
+  at: text("at").notNull(),
+  personId: text("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
+  previousAt: text("previous_at"),
+  previousPersonId: text("previous_person_id").references(() => people.id, { onDelete: "set null" }),
+});
+
 /** Snapshot of the document after every edit (title/content/metadata). */
 export const edits = pgTable(
   "edits",

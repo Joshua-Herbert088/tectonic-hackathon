@@ -744,7 +744,8 @@ La DSN de décembre 2026 doit être déposée au plus tard le 5 janvier 2027 (en
       updatedAt: ago(560),
       lastEditedById: "hugo",
       verifications: [{ personId: "hugo", at: ago(560) }],
-      views: views(["camille"], 60),
+      // Nobody has opened it in two years: the "quiet document" notice in the demo.
+      views: [{ personId: "camille", at: ago(735) }],
       content: `# Indemnité de télétravail – France
 
 - Montant : 2,70 € par jour de télétravail, exonéré dans la limite de 59,40 € par mois
@@ -893,7 +894,7 @@ TT-300 terminals must be replaced; customers were informed in March 2026.`,
       updatedAt: ago(1500),
       lastEditedById: "ruben",
       verifications: [{ personId: "ruben", at: ago(1500) }],
-      views: views(["nina"], 90),
+      views: [{ personId: "nina", at: ago(1100) }],
       supersededById: "terminal-models",
       content: `# Clocking terminal installation guide (2019)
 
@@ -1059,7 +1060,7 @@ Contact at the client: HR manager, via the client portal.`,
       updatedAt: ago(1340),
       lastEditedById: "pieter",
       verifications: [],
-      views: views(["sofie"], 60),
+      views: [{ personId: "sofie", at: ago(900) }],
       content: `# Noordkaai Logistics – onboarding checklist (2022)
 
 - Joint committee 226, monthly pay, 120 employees

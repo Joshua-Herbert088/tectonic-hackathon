@@ -5,12 +5,15 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
+import { useCompose } from "@/components/Compose";
 import { AnswerCard } from "@/components/Expertise";
 import { FileIcon } from "@/components/FileIcon";
 import { Icon } from "@/components/Icons";
 import { Markdown, type LineMark } from "@/components/Markdown";
 import { RecentOverlap } from "@/components/RecentOverlap";
 import { ConfidentialPill, StatusPill } from "@/components/StatusPill";
+import { LegalBadge } from "@/components/LegalBadge";
+import type { QuietNotice } from "@/lib/quiet";
 import { ConfidentialSwitch } from "@/components/UploadDialog";
 import { AppShell } from "@/components/AppShell";
 import { Avatar } from "@/components/TopBar";
@@ -46,6 +49,8 @@ interface Detail {
   folders: Folder[];
   /** Answers colleagues gave in chat on this document's topics, ones that contradict it first. */
   answers: AnswerView[];
+  /** Set when nobody opened, edited or verified it for a long time (only when the page is opened). */
+  quiet?: QuietNotice | null;
 }
 
 export default function DocPage() {
@@ -336,6 +341,7 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
                 </span>
                 <span>edited {timeAgo(doc.updatedAt)} by {person(doc.lastEditedById)?.name ?? "unknown"}</span>
               </div>
+              <LegalBadge doc={doc} />
             </div>
             {editing ? (
               <div className="flex shrink-0 gap-2">
@@ -362,6 +368,7 @@ function DocView({ id, viewerId }: { id: string; viewerId: string }) {
           </div>
 
           <RecentOverlap docId={doc.id} viewerId={viewerId} />
+          {detail.quiet && !editing && <QuietBanner notice={detail.quiet} ownerId={doc.ownerId} title={doc.title} onVerify={verify} />}
           {saveGate.error && !saveGate.mode && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
           {actionError && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{actionError}</div>}
           {!editing && doubts.length > 0 && showMarks && (
@@ -841,4 +848,41 @@ function History({ points }: { points: { score: number; computedAt: string }[] }
 /** A document's tags as the tag dialog edits them. */
 function metaOf(doc: Doc): DocMeta {
   return { locations: doc.locations, audienceTeamIds: doc.audienceTeamIds, clientId: doc.clientId ?? null, tags: doc.tags };
+}
+
+/**
+ * Nobody has opened, edited or verified this document in a long time. Not a verdict – the score is
+ * unchanged – just a nudge to check before relying on it, with the two ways to clear it up.
+ */
+function QuietBanner({ notice, ownerId, title, onVerify }: { notice: QuietNotice; ownerId: string | null; title: string; onVerify: () => void }) {
+  const { person } = useApp();
+  const compose = useCompose();
+  const [hidden, setHidden] = useState(false);
+  if (hidden) return null;
+  const who = person(notice.personId);
+  const owner = person(ownerId);
+  const years = Math.floor(notice.days / 365);
+  const span = years >= 2 ? `${years} years` : years === 1 ? "over a year" : `${notice.days} days`;
+  const what = { opened: "opened", edited: "edited", verified: "verified" }[notice.kind];
+  const when = new Date(notice.at).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  return (
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-[#f6d58b] bg-[#fef7e0] px-5 py-2.5 text-sm text-[#7a4a00]" role="status">
+      <svg width="18" height="18" viewBox="0 0 24 24" className="mt-0.5 shrink-0" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7Z" /></svg>
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">Nobody has looked at this document in {span}.</div>
+        <div className="text-xs">
+          It was last {what} {who ? `by ${who.name} ` : ""}on {when}. That doesn&apos;t mean it&apos;s wrong, and its trust score is unchanged – but check that it still applies before you rely on it.
+        </div>
+        <div className="mt-1 flex flex-wrap gap-x-3 text-xs font-medium">
+          <button onClick={onVerify} className="text-[#0b57d0] hover:underline">It&apos;s still correct</button>
+          {owner?.active && (
+            <button onClick={() => compose({ source: "email", to: [{ personId: owner.id, name: owner.name, email: owner.email }], subject: `Is “${title}” still up to date?` })} className="text-[#0b57d0] hover:underline">
+              Ask {owner.name.split(" ")[0]} (owner)
+            </button>
+          )}
+        </div>
+      </div>
+      <button onClick={() => setHidden(true)} className="shrink-0 text-xs text-[#7a4a00] hover:underline">Dismiss</button>
+    </div>
+  );
 }

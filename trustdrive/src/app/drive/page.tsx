@@ -16,6 +16,7 @@ import { useEscape } from "@/components/useEscape";
 import { useScores } from "@/components/useScores";
 import { NameDialog } from "@/components/NameDialog";
 import { ConfidentialPill, StatusPill } from "@/components/StatusPill";
+import { LegalBadge } from "@/components/LegalBadge";
 import { canMoveFolder, childFolders, folderLabel, folderPath, subtree, validateFolderName } from "@/lib/folders";
 import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
@@ -553,6 +554,7 @@ function Drive() {
                           <div className="truncate font-medium text-slate-800">{d.title}</div>
                           <div className="flex items-center gap-1.5 truncate text-xs text-slate-500">
                             {d.confidential && <ConfidentialPill />}
+                            <LegalBadge doc={d} compact />
                             {d.status !== "Completed" && <StatusPill status={d.status} />}
                             {d.clientId && <span className="rounded-full bg-slate-100 px-1.5 text-slate-600">{clientName(d.clientId)}</span>}
                             {where && (

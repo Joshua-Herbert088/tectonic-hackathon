@@ -9,6 +9,7 @@ import { FaqSuggestions } from "@/components/FaqSuggestions";
 import { Icon } from "@/components/Icons";
 import { ShareAnswers } from "@/components/ShareAnswers";
 import { ConfidentialPill } from "@/components/StatusPill";
+import { LegalBadge } from "@/components/LegalBadge";
 import { Avatar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
@@ -387,6 +388,7 @@ function DocLine({ r, trust, failed, extra, compact, good, children }: { r: Row;
         <div className="flex items-center gap-2">
           <Link href={`/doc/${r.id}`} className="truncate text-sm font-medium text-slate-900 hover:underline">{r.title}</Link>
           {r.confidential && <ConfidentialPill />}
+          <LegalBadge doc={r} compact />
         </div>
         <div className="truncate text-xs text-slate-500">
           {band && <span style={{ color: band.color }}>{band.label}</span>}

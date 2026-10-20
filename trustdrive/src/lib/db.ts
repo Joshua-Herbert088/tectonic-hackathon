@@ -197,7 +197,7 @@ async function syncSeed(orm: Orm) {
 export async function resetDb() {
   const orm = await db();
   await orm.transaction(async (tx) => {
-    for (const t of [schema.activity, schema.notifications, schema.answers, schema.boardThreads, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+    for (const t of [schema.documentOpens, schema.activity, schema.notifications, schema.answers, schema.boardThreads, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
       await tx.delete(t);
     }
   });
@@ -419,6 +419,29 @@ export async function recordActivity(personId: string, ev: { kind: ActivityEvent
   return true;
 }
 const fold = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+
+/** Opening the same document again within this window is the same visit. */
+const SAME_VISIT_MS = 12 * 3600_000;
+
+/**
+ * Records that someone opened a document, and returns the open before this visit (null if none was
+ * recorded). Reopening it within the same visit keeps the earlier answer, so the page doesn't change
+ * its mind on a reload.
+ */
+export async function recordOpen(docId: string, personId: string, now = Date.now()): Promise<{ at: string; personId: string | null } | null> {
+  const orm = await db();
+  const at = new Date(now).toISOString();
+  const [row] = await orm.select().from(schema.documentOpens).where(eq(schema.documentOpens.docId, docId));
+  if (!row) {
+    await orm.insert(schema.documentOpens).values({ docId, at, personId }).onConflictDoNothing();
+    return null;
+  }
+  if (row.personId === personId && now - Date.parse(row.at) < SAME_VISIT_MS) {
+    return row.previousAt ? { at: row.previousAt, personId: row.previousPersonId } : null;
+  }
+  await orm.update(schema.documentOpens).set({ at, personId, previousAt: row.at, previousPersonId: row.personId }).where(eq(schema.documentOpens.docId, docId));
+  return { at: row.at, personId: row.personId };
+}
 
 /** Someone's recorded activity since a moment, newest first. */
 export async function loadActivity(personId: string, since: string, limit = 500): Promise<ActivityEvent[]> {

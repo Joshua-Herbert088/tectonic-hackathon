@@ -1,8 +1,9 @@
 import { requireViewer } from "@/lib/auth";
-import { deleteDocumentForever, loadTrash, loadWorld, recordActivity, recordOverrides, updateDocument } from "@/lib/db";
+import { deleteDocumentForever, loadTrash, loadWorld, recordActivity, recordOpen, recordOverrides, updateDocument } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
 import { notifyEdit, notifyOverrides } from "@/lib/notify";
+import { quietNotice } from "@/lib/quiet";
 import { documentPatch } from "@/lib/schemas";
 import { checkAppliesTo, docDetail, gateDraft, redundancyCheck, requireTags } from "@/lib/service";
 import { substance } from "@/lib/similarity";
@@ -16,7 +17,12 @@ export const GET = handle(async (req, ctx: Ctx) => {
   if (!detail) throw new HttpError(404, "Not found");
   // For the viewer's mentor, if they have one. Not a view: Jev never sees it, so no rescore.
   await recordActivity(viewer.id, { kind: "open", docId: id }).catch((e: Error) => log.warn("could not record activity", { error: e.message }));
-  return Response.json(detail);
+  // When it was opened before this visit: a document nobody looked at in a long time gets a notice.
+  const before = await recordOpen(id, viewer.id).catch((e: Error) => {
+    log.warn("could not record the open", { error: e.message });
+    return null;
+  });
+  return Response.json({ ...detail, quiet: quietNotice(detail.doc, before) });
 });
 
 /**

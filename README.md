@@ -33,6 +33,18 @@ The document page lists plain facts such as "Edited by owner Lotte Peeters 2 hou
 ### Verify button
 **"I confirm this document is correct"** records a verification by the current user. That changes Jev's input, so the document is rescored straight away.
 
+### Legal & Compliance badge
+Documents that come from Legal & Compliance (the team that maintains them), or that someone from Legal confirmed, carry a badge saying **who in Legal validated it and when** (`src/lib/legal.ts`, `src/components/LegalBadge.tsx`):
+- On the document page it's a stamp under the title: *Legal & Compliance · Validated by Tom Hermans on 23 Sept 2026 (27 days ago)*. In the drive and on **For you** it's a short pill: *Legal · Tom, 23 Sept 2026*.
+- The validation is the latest "I confirm this document is correct" by someone in Legal (or who was in Legal before moving team). It turns amber, *due for another check*, when it's over a year old, and says so when the validator has since left the company or moved team.
+- A Legal document that nobody in Legal validated yet says *Not validated by Legal yet*.
+
+### Quiet documents: "nobody has looked at this in two years"
+A document can be wrong without anything contradicting it. When nobody has **opened, edited or verified** a document in over a year, whoever opens it gets a notice at the top: *Nobody has looked at this document in over a year. It was last edited by Hugo Bernard on 8 April 2025. That doesn't mean it's wrong, and its trust score is unchanged – but check that it still applies before you rely on it* (`src/lib/quiet.ts`).
+- Nothing is decided for the reader: the score doesn't change and the AI isn't asked, because a quiet document isn't necessarily a bad one. The notice offers **It's still correct** (a verification, which clears it for everyone) and **Ask the owner** when the owner is still at the company.
+- Every open is recorded per document (`document_opens`, kept apart from the views Jev reads, so opening a document never rescores it). Reopening it in the same visit keeps the notice; the next person opening it sees that it was looked at recently.
+- In the demo, *Indemnité de télétravail – France*, *Noordkaai Logistics – onboarding checklist (2022)* and *Clocking terminal installation guide* have been quiet for over a year; the GDPR documents in *Legal & compliance* show a current and an outdated Legal validation.
+
 ### Conflicts block the save
 Every upload and every text edit is checked against **all** existing documents (`src/lib/conflicts.ts`):
 1. It picks out lines containing numbers, amounts or dates. Table rows become "Header: value; …".
@@ -331,6 +343,8 @@ trustdrive/
   src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no, or the rules without Jev)
   src/lib/conflict-cases.ts  hand-labelled conflict pairs used by the tests and the Jev eval
   src/lib/briefing.ts      handover briefing
+  src/lib/legal.ts         the Legal & Compliance badge: who in Legal validated a document, and when
+  src/lib/quiet.ts         "nobody has looked at this in a year" notices (opens are recorded in document_opens)
   src/lib/mentoring.ts     mentoring: a mentee's questions, searches and reading by department, and where they struggle
   src/app/client/[id]/     client overview (service: clientOverview in src/lib/service.ts)
   src/lib/taxonomy.ts      default topics, document types and countries (with multilingual keywords), validation, required tags
