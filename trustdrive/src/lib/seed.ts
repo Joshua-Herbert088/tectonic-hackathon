@@ -32,7 +32,8 @@ export function buildSeed(now = Date.now()): Db {
   ];
 
   const people: Person[] = withContactDetails([
-    { id: "lotte", name: "Lotte Peeters", role: "Senior Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(2400), color: "#1a73e8" },
+    // Lotte chose to always share the answers she gives in chats; everyone else is asked first.
+    { id: "lotte", name: "Lotte Peeters", role: "Senior Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(2400), color: "#1a73e8", answerSharing: "always" },
     { id: "jonas", name: "Jonas Maes", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(120), color: "#e8710a", mentorId: "lotte", mentorSince: ago(30) },
     { id: "an", name: "An Claes", role: "Payroll Team Lead", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(3100), color: "#188038" },
     { id: "pieter", name: "Pieter Wouters", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: false, joinedAt: ago(2900), leftAt: ago(740), color: "#9334e6" },
@@ -1636,4 +1637,43 @@ export function buildConversations(now = Date.now()): (Omit<Conversation, "messa
       ],
     },
   ]);
+}
+
+/** Questions on the message board: one solved, one answered, one nobody has answered yet. */
+export function buildBoard(now = Date.now()) {
+  const ago = (days: number, hours = 0) => new Date(now - days * DAY - hours * HOUR).toISOString();
+  return [
+    {
+      id: "board-absence-relapse",
+      title: "Which absence code do we use for a relapse within 14 days?",
+      askerId: "sofie",
+      askedAt: ago(20),
+      topics: ["absence", "time"],
+      locations: ["Belgium"],
+      askedIds: ["wout", "lotte"],
+      replies: [{ personId: "wout", sentAt: ago(19, 20), body: "Use code S2 for a relapse within 14 days of the previous sick period. A new sick period is S1." }],
+      solvedReply: 0,
+    },
+    {
+      id: "board-vakantiegeld-13th",
+      title: "Is the 13th month part of the basis for vakantiegeld in the Netherlands?",
+      askerId: "emma",
+      askedAt: ago(6),
+      topics: ["holiday-pay", "compensation"],
+      locations: ["Netherlands"],
+      askedIds: ["lars", "sanne"],
+      replies: [{ personId: "sanne", sentAt: ago(5, 18), body: "No, the 13th month isn't part of the vakantiegeld basis, unless the CAO of the client says otherwise." }],
+    },
+    {
+      id: "board-parttime-bonus",
+      title: "How do we calculate the year-end bonus for someone who went from full-time to part-time halfway through the year?",
+      askerId: "jonas",
+      askedAt: ago(3),
+      topics: ["bonus", "compensation"],
+      locations: ["Belgium"],
+      // Asked three days ago and still unanswered: the next colleagues are asked when the board is opened.
+      askedIds: ["karim"],
+      replies: [] as { personId: string; sentAt: string; body: string }[],
+    },
+  ] as { id: string; title: string; askerId: string; askedAt: string; topics: string[]; locations: string[]; askedIds: string[]; replies: { personId: string; sentAt: string; body: string }[]; solvedReply?: number }[];
 }

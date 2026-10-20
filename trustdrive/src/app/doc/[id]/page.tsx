@@ -22,10 +22,9 @@ import { VersionHistory } from "@/components/VersionHistory";
 import { WhoToContact } from "@/components/WhoToContact";
 import type { Contact, FormerContributor } from "@/lib/contacts";
 import { folderLabel, folderOptions } from "@/lib/folders";
-import { citationHref } from "@/lib/handoverDoc";
 import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
-import { STATUSES, type Answer, type Client, type ConflictOverride, type Conversation, type Doc, type Doubt, type Folder, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
+import { STATUSES, type AnswerView, type Client, type ConflictOverride, type Conversation, type Doc, type Doubt, type Folder, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
 
 /** Non-breaking spaces: an option's text can't be indented with padding. */
 const INDENT = "\u00a0\u00a0\u00a0";
@@ -46,7 +45,7 @@ interface Detail {
   sources: Conversation[];
   folders: Folder[];
   /** Answers colleagues gave in chat on this document's topics, ones that contradict it first. */
-  answers: Answer[];
+  answers: AnswerView[];
 }
 
 export default function DocPage() {
@@ -760,11 +759,11 @@ function DoubtRow({ d, active, onFocus }: { d: Doubt; active: boolean; onFocus: 
           <span className="truncate italic">“{d.lineText}”</span>
         </div>
         <div className="text-slate-800">{d.text}</div>
-        {d.chat && (
+        {d.answer && (
           <div className="mt-1.5 border-t border-slate-200 pt-1.5 text-slate-600">
-            “{d.chat.answerLine}”{" "}
-            <Link href={citationHref(d.chat.conversationId, d.chat.messageId, d.chat.answerLine)} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">
-              Read it in the chat
+            “{d.answer.line}”{" "}
+            <Link href={d.answer.href} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">
+              Read the answer
             </Link>
           </div>
         )}

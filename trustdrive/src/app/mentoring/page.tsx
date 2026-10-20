@@ -65,7 +65,7 @@ function MentoringView() {
         <section className="rounded-2xl bg-white p-6">
           <h1 className="text-2xl text-slate-900">Mentoring</h1>
           <p className="mt-1 text-sm text-slate-600">
-            A mentor sees what their mentee asks in <Link href="/people" className="text-blue-700 hover:underline">Who knows…?</Link>, searches for in the drive, opens, and asks colleagues by email or Teams, grouped by department. That way you can check in when a newcomer keeps circling a subject, without them having to ask and without anyone being notified.
+            A mentor sees what their mentee asks in <Link href="/ask" className="text-blue-700 hover:underline">Ask</Link>, searches for in the drive, opens, and asks colleagues by email or Teams, grouped by department. That way you can check in when a newcomer keeps circling a subject, without them having to ask and without anyone being notified.
           </p>
           {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
         </section>
@@ -110,7 +110,7 @@ function YourMentor({ mentorId, since }: { mentorId: string; since: string | nul
             <Link href={`/person/${mentor.id}`} className="font-medium hover:underline">{mentor.name}</Link> is your mentor{since ? ` since ${timeAgo(since)}` : ""}.
           </div>
           <div className="text-xs text-slate-600">
-            {first} can see the questions you ask in Who knows…?, what you search for in the drive, the documents you open and the questions you send colleagues – only from when {first} became your mentor, and only {first}.
+            {first} can see the questions you ask in Ask, what you search for in the drive, the documents you open and the questions you send colleagues – only from when {first} became your mentor, and only {first}.
           </div>
         </div>
       </div>
@@ -264,7 +264,7 @@ function MenteeDetail({ personId }: { personId: string }) {
           <div className="grid gap-4 md:grid-cols-2">
             <section className="rounded-2xl bg-white p-6">
               <h3 className="text-lg text-slate-900">What {first} asked</h3>
-              <p className="mb-2 text-[11px] text-slate-500">Questions in Who knows…? and questions {first} wrote to colleagues.</p>
+              <p className="mb-2 text-[11px] text-slate-500">Questions in Ask and questions {first} wrote to colleagues.</p>
               {view.questions.length === 0 ? (
                 <p className="text-sm text-slate-600">No questions yet.</p>
               ) : (
@@ -273,13 +273,13 @@ function MenteeDetail({ personId }: { personId: string }) {
                     <li key={i} className="py-2 text-sm">
                       <div className="text-slate-800">
                         {q.kind === "ask" ? (
-                          <Link href={`/people?q=${encodeURIComponent(q.text)}`} className="hover:underline">“{q.text}”</Link>
+                          <Link href={`/ask?q=${encodeURIComponent(q.text)}`} className="hover:underline">“{q.text}”</Link>
                         ) : (
                           <Link href={`/conversations?c=${q.conversationId}`} className="hover:underline">“{q.text}”</Link>
                         )}
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-500">
-                        {q.kind === "ask" ? "Who knows…?" : `to ${q.to?.join(", ") || "colleagues"}`} · {area(q.teamId)}
+                        {q.kind === "ask" ? "Ask" : `to ${q.to?.join(", ") || "colleagues"}`} · {area(q.teamId)}
                         {q.about.length > 0 && <> · about {q.about.join(", ")}</>} · {timeAgo(q.at)}
                       </div>
                     </li>
@@ -380,7 +380,7 @@ function AreaCard({ a, label, first }: { a: StruggleArea; label: string; first: 
             </div>
           )}
           {a.topTopic && (
-            <Link href={`/people?q=${encodeURIComponent(a.topTopic.label)}`} className="inline-block text-blue-700 hover:underline">
+            <Link href={`/ask?q=${encodeURIComponent(a.topTopic.label)}`} className="inline-block text-blue-700 hover:underline">
               Who knows about {a.topTopic.label}? – someone to bring in
             </Link>
           )}

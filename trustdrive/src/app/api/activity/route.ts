@@ -4,7 +4,7 @@ import { recordActivity } from "@/lib/db";
 import { handle, readBody } from "@/lib/http";
 
 /**
- * A question asked in "Who knows…?" or a drive search, for the signed-in person's mentor. Only kept
+ * A question asked in Ask or a drive search, for the signed-in person's mentor. Only kept
  * when they have one; opening a document is recorded by the document route itself.
  */
 export const POST = handle(async (req) => {

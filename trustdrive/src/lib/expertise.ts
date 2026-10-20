@@ -1,9 +1,10 @@
 import { isInternal } from "./answerDoc";
-import { faqSuggestions, withLiveConflicts } from "./answers";
+import { faqSuggestions, publicHref, viewOf, withLiveConflicts } from "./answers";
 import { isGlobal } from "./appliesTo";
 import { blame } from "./diff";
 import { fold } from "./lexicon";
 import { keywordHits, taxonomyOf, type Taxonomy } from "./taxonomy";
+import { folderLabel } from "./folders";
 import { daysSince, timeAgo } from "./time";
 import type { Answer, Client, Conversation, Db, Doc, Location, Person } from "./types";
 
@@ -26,6 +27,8 @@ export interface Evidence {
   doc?: { id: string; title: string };
   /** With `messageId`, the message it's about. */
   conversation?: { id: string; title: string; messageId?: number };
+  /** An answer to a colleague's question: its question, and where anyone can read it (never the private chat). */
+  answer?: { href: string; question: string };
   /** More context, such as the reason given for an exception. */
   detail?: string;
   /** When it happened; unset for ongoing roles (owner, collaborator). */
@@ -48,12 +51,14 @@ const MIN_SCORE = 3;
 const MAX_EXPERTS = 8;
 const MAX_EVIDENCE = 6;
 const MAX_ANSWERS = 4;
+const MAX_DOCUMENTS = 4;
 /** Documents for another country than the one asked about still count, but much less. */
 const OTHER_COUNTRY = 0.15;
 /** A conversation that only mentions a topic says less than a document tagged with it. */
 const MENTIONED = 0.6;
-/** Answering a colleague's question: about as strong as verifying a document. */
+/** Answering a colleague's question: about as strong as verifying a document; more when the asker said it solved it. */
 const ANSWER_WEIGHT = 8;
+const CONFIRMED_WEIGHT = 12;
 /** Moved team and hasn't worked on it since. */
 const MOVED_AWAY = 0.8;
 
@@ -111,27 +116,25 @@ function conversationEvidence(c: Conversation) {
   return new Map([...mine].map(([pid, { n, last }]) => [pid, [{ action: n === 1 ? "Wrote in" : `Wrote ${n} messages in`, conversation: ref, weight: 2 + 1.5 * Math.min(n, 4), at: last }]]));
 }
 
-/** Answering a colleague's question counts; asking one doesn't. */
-function answerEvidence(db: Db, a: Answer): Evidence {
-  const asker = db.people.find((p) => p.id === a.askerId)?.name.split(" ")[0];
+/** Answering a colleague's question counts; asking one doesn't. Who asked isn't said: a chat is private. */
+function answerEvidence(a: Answer): Evidence {
   return {
-    action: `Answered ${asker ? `${asker}'s` : "a"} question in`,
-    conversation: { id: a.conversationId, title: a.conversationTitle, messageId: a.answerMessageId },
-    detail: `“${a.question}”`,
+    action: a.source === "board" ? (a.confirmed ? "Solved a question on the board:" : "Answered on the board:") : "Answered a colleague in chat:",
+    answer: { href: publicHref(a), question: a.question },
     at: a.answeredAt,
-    weight: ANSWER_WEIGHT,
+    weight: a.confirmed ? CONFIRMED_WEIGHT : ANSWER_WEIGHT,
   };
 }
 
 /**
  * Chats among colleagues only count through the answers captured from them: being in the thread, or
- * asking, says nothing about what someone knows.
+ * asking, says nothing about what someone knows. `answers` are the shared ones.
  */
 export function buildLedger(db: Db, history: History, conversations: Conversation[], answers: Answer[] = []): Ledger {
   return {
     docs: new Map(db.docs.map((d) => [d.id, docEvidence(db, d, history)])),
     conversations: new Map(conversations.filter((c) => !isInternal(c)).map((c) => [c.id, conversationEvidence(c)])),
-    answers: new Map(answers.map((a) => [a.id, answerEvidence(db, a)])),
+    answers: new Map(answers.map((a) => [a.id, answerEvidence(a)])),
   };
 }
 
@@ -266,14 +269,15 @@ const latest = (evidence: Evidence[]) => evidence.reduce<string | null>((m, e) =
  * Colleagues ranked by evidence on the documents, client conversations and answers a question is about.
  * Each item's relevance multiplies the (faded) evidence on it; a topic or client someone hid doesn't
  * count for them. People who left are listed separately: their handover briefing holds what they knew.
- * Also returns the answers themselves: someone may have asked this before.
+ * Also returns the answers themselves (someone may have asked this before) and the documents it's about,
+ * so a question can be answered before anyone replies. `answers` are the shared ones.
  */
 export function whoKnows(db: Db, ledger: Ledger, conversations: Conversation[], answers: Answer[], query: string, viewer: Person, now = Date.now()) {
   const tax = taxonomyOf(db.terms);
   const q = interpret(db, query);
   const answerHits = new Map(answers.map((a) => [a.id, hitsFor(tax, answerSubject(a), q)]));
   const items = [
-    ...db.docs.map((d) => ({ hits: hitsFor(tax, d, q), people: ledger.docs.get(d.id), kind: "doc" as const })),
+    ...db.docs.map((d) => ({ hits: hitsFor(tax, d, q), people: ledger.docs.get(d.id), kind: "doc" as const, doc: d })),
     ...conversations.map((c) => ({ hits: conversationHits(db, tax, c, q), people: ledger.conversations.get(c.id), kind: "conversation" as const })),
     ...answers.map((a) => ({ hits: answerHits.get(a.id)!, people: new Map([[a.answererId, [ledger.answers.get(a.id)!]]]), kind: "answer" as const })),
   ].filter((x) => x.hits.length && x.people);
@@ -336,7 +340,13 @@ export function whoKnows(db: Db, ledger: Ledger, conversations: Conversation[], 
     query: q,
     experts: top,
     former: former.slice(0, 4),
-    answers: withLiveConflicts(db, asked),
+    answers: withLiveConflicts(db, asked.map((a) => viewOf(a, viewer))),
+    // The documents it's about, most relevant first; replaced ones are left out.
+    documentIds: items
+      .flatMap((i) => ("doc" in i && i.doc && !i.doc.supersededById ? [{ id: i.doc.id, s: Math.max(...i.hits.map((h) => h.score)) }] : []))
+      .sort((a, b) => b.s - a.s)
+      .slice(0, MAX_DOCUMENTS)
+      .map((d) => d.id),
     considered: {
       documents: items.filter((i) => i.kind === "doc").length,
       conversations: items.filter((i) => i.kind === "conversation").length,
@@ -376,12 +386,18 @@ export interface Area {
 }
 
 const RECENT_ANSWERS = 5;
+const MAX_FOLDERS = 3;
+/** Opening documents in a folder this often in the last three months shows as "often opens". */
+const OFTEN_OPENS = 3;
+const OPENS_DAYS = 90;
 
 /**
  * Someone's profile, from their evidence: the topics and clients they know (strongest first, each with
- * its evidence), what they're in charge of, the decisions they explained, the questions they answered
- * and who they work with most. Hidden areas, and suggestions to write answers up, are only for the person
- * themselves.
+ * its evidence), the folders they work in, what they're in charge of, the decisions they explained, the
+ * questions they answered and who they work with most. Hidden areas, answers waiting to be shared and
+ * suggestions to write answers up are only for the person themselves. `answers` are all of them (shared
+ * or waiting); only shared ones count.
+ * "Often opens" is the one thing based on reading: shown as such, per folder, and never counted as expertise.
  */
 export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[], answers: Answer[], person: Person, viewer: Person, now = Date.now()) {
   const tax = taxonomyOf(db.terms);
@@ -439,7 +455,7 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     if (client) credit(area(`client:${client.id}`, client.name), mine, { conv: c.id });
     together(people, mine, { kind: "conversation", id: c.id, title: c.title });
   }
-  const answered = answers.filter((a) => a.answererId === person.id);
+  const answered = answers.filter((a) => a.answererId === person.id && a.sharing === "shared");
   for (const a of answered) {
     const e = ledger.answers.get(a.id);
     if (!e) continue;
@@ -497,6 +513,20 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     .map(({ s: _s, active: _a, ...w }) => w);
 
   const verifiedLastYear = db.docs.filter((d) => d.verifications.some((v) => v.personId === person.id && daysSince(v.at, now) <= 365)).length;
+
+  // Folders: where their work is (from the same evidence), and where they read a lot (not expertise).
+  const work = new Map<string, number>();
+  const opens = new Map<string, number>();
+  for (const doc of db.docs) {
+    if (!doc.folderId) continue;
+    const mine = ledger.docs.get(doc.id)?.get(person.id);
+    if (mine) work.set(doc.folderId, (work.get(doc.folderId) ?? 0) + mine.reduce((n, e) => n + strength(e, now), 0));
+    const n = doc.views.filter((v) => v.personId === person.id && daysSince(v.at, now) <= OPENS_DAYS).length;
+    if (n) opens.set(doc.folderId, (opens.get(doc.folderId) ?? 0) + n);
+  }
+  const folder = (id: string) => ({ id, label: folderLabel(db.folders, id) ?? id });
+  const worksIn = [...work].sort((a, b) => b[1] - a[1]).slice(0, MAX_FOLDERS).map(([id]) => folder(id));
+  const oftenOpens = [...opens].filter(([, n]) => n >= OFTEN_OPENS).sort((a, b) => b[1] - a[1]).slice(0, MAX_FOLDERS).map(([id, n]) => ({ ...folder(id), opens: n }));
   return {
     personId: person.id,
     topics,
@@ -504,9 +534,20 @@ export function profileOf(db: Db, ledger: Ledger, conversations: Conversation[],
     decisions,
     inCharge,
     worksWith: colleagues,
+    worksIn,
+    oftenOpens,
     // Newest first, like everything else; only the ones about topics they didn't hide, for anyone else.
-    answers: withLiveConflicts(db, answered.filter((a) => own || !tax.mostSpecific(a.topics).some((t) => hidden.has(`topic:${t}`))).slice(0, RECENT_ANSWERS)),
-    faqs: own ? faqSuggestions(db, answers, person.id, now) : [],
+    answers: withLiveConflicts(
+      db,
+      answered
+        .filter((a) => own || !tax.mostSpecific(a.topics).some((t) => hidden.has(`topic:${t}`)))
+        .slice(0, RECENT_ANSWERS)
+        .map((a) => viewOf(a, viewer)),
+    ),
+    /** Their answers in chats that wait for them to decide; only on their own profile. */
+    waiting: own ? withLiveConflicts(db, answers.filter((a) => a.answererId === person.id && a.sharing === "pending").map((a) => viewOf(a, viewer))) : [],
+    sharing: own ? (person.answerSharing ?? "ask") : null,
+    faqs: own ? faqSuggestions(db, answers.filter((a) => a.answererId === person.id), person.id, now) : [],
     stats: {
       documents,
       conversations: conversationCount,

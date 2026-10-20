@@ -7,13 +7,14 @@ import { MESSAGE_SENT, useCompose } from "@/components/Compose";
 import { useApp } from "@/components/AppContext";
 import { FaqSuggestions } from "@/components/FaqSuggestions";
 import { Icon } from "@/components/Icons";
+import { ShareAnswers } from "@/components/ShareAnswers";
 import { ConfidentialPill } from "@/components/StatusPill";
 import { Avatar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
 import type { FaqSuggestion } from "@/lib/answers";
 import { daysSince, timeAgo } from "@/lib/time";
-import type { Doc, Person, TrustScore } from "@/lib/types";
+import type { AnswerView, Doc, Person, TrustScore } from "@/lib/types";
 
 type Row = Omit<Doc, "content"> & { trust: TrustScore | null; issue: string | null; strength: string | null; role: "owner" | "collaborator"; lastVerifiedAt: string | null };
 
@@ -26,6 +27,7 @@ interface Home {
   impact: { opens: number; readers: number; latestOpen: { personId: string; at: string; docId: string; title: string } | null; verified: number; topics: string[] };
   fresh: Row[];
   faqs: FaqSuggestion[];
+  toShare: AnswerView[];
 }
 
 const STALE_DAYS = 180;
@@ -145,6 +147,7 @@ function HomeView({ viewerId }: { viewerId: string }) {
 
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] [&>*]:min-w-0">
           <div className="space-y-6">
+            {data.toShare.length > 0 && <ShareAnswers answers={data.toShare} onDone={() => setReload((n) => n + 1)} />}
             {data.faqs.length > 0 && <FaqSuggestions faqs={data.faqs} onDismissed={() => setReload((n) => n + 1)} />}
             <Card
               icon="check"

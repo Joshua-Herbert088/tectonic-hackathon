@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { captureAnswers, faqSuggestions, findExchanges } from "./answers";
+import { captureAnswers, decideSharing, faqSuggestions, findExchanges, setSharingPreference, sharedOnly, viewOf } from "./answers";
 import { composeFaqMarkdown, isInternal } from "./answerDoc";
-import { closeDb, findPerson, listNotifications, loadAnswers, loadConversations, loadWorld, markAnswersInFaq, migrateAndSeed, setConversationPrivate, updateDocument } from "./db";
+import { askNextWhenUnanswered, askQuestion, boardList, boardThread, markSolved, reply } from "./board";
+import { closeDb, findPerson, listNotifications, loadAnswers, loadBoard, loadConversations, loadWorld, markAnswersInFaq, migrateAndSeed, setConversationPrivate, updateDocument } from "./db";
 import { lineDoubts } from "./doubts";
 import { sendMessage } from "./messaging";
 import { dismissFaqSuggestion, docDetail, faqDraft, personProfile, whoKnowsFor } from "./service";
@@ -11,9 +12,11 @@ import type { Conversation, Message, Person } from "./types";
 let jonas: Person;
 let lotte: Person;
 let karim: Person;
+let wout: Person;
+let emma: Person;
 beforeAll(async () => {
   await migrateAndSeed();
-  [jonas, lotte, karim] = await Promise.all(["jonas", "lotte", "karim"].map(async (id) => (await findPerson({ id }))!));
+  [jonas, lotte, karim, wout, emma] = await Promise.all(["jonas", "lotte", "karim", "wout", "emma"].map(async (id) => (await findPerson({ id }))!));
 }, 60_000);
 afterAll(async () => {
   await closeDb();
@@ -63,43 +66,79 @@ describe("finding questions and answers", () => {
 describe("capturing answers", () => {
   test("keeps the answers in the demo chats, not the private one or the one about a colleague", async () => {
     await captureAnswers();
-    const answers = await loadAnswers();
+    const answers = (await loadAnswers()).filter((a) => a.source !== "board");
     expect(answers.map((a) => a.conversationId).sort()).toEqual(["conv-qa-overtime-hours", "conv-qa-overtime-parttime", "conv-qa-overtime-recovery", "conv-qa-vakantiegeld"]);
     expect(answers.find((a) => a.conversationId === "conv-qa-vakantiegeld")).toMatchObject({ askerId: "emma", answererId: "lars", topics: ["holiday-pay", "compensation"], locations: ["Netherlands"], method: "rules" });
     // Nothing new: a second run adds nothing.
     await captureAnswers();
-    expect(await loadAnswers()).toHaveLength(4);
+    expect((await loadAnswers()).filter((a) => a.source !== "board")).toHaveLength(4);
+  });
+
+  test("the person who answered decides: Lotte always shares, Lars is asked first", async () => {
+    const answers = await loadAnswers();
+    expect(answers.filter((a) => a.answererId === "lotte").every((a) => a.sharing === "shared")).toBe(true);
+    const lars = answers.find((a) => a.answererId === "lars")!;
+    expect(lars.sharing).toBe("pending");
+    // Asked quietly, in the bell; until then nobody else sees it.
+    expect((await listNotifications("lars")).items[0]).toMatchObject({ kind: "share", otherDocId: String(lars.id) });
+    expect((await experts("vakantiegeld", emma)).answers.map((a) => a.id)).not.toContain(lars.id);
+    await decideSharing((await findPerson({ id: "lars" }))!, [lars.id], true);
+    expect((await experts("vakantiegeld", emma)).answers.map((a) => a.id)).toContain(lars.id);
   });
 
   test("an answer that contradicts a document is flagged there, and its owner is told", async () => {
     const hours = (await loadAnswers()).find((a) => a.conversationId === "conv-qa-overtime-hours")!;
     expect(hours.conflict).toMatchObject({ docId: "overtime-be", severity: "hard", lineText: expect.stringContaining("max 100 hours"), answerLine: "Voluntary overtime is max 120 hours per calendar year now." });
     const [n] = (await listNotifications("marc")).items;
-    expect(n).toMatchObject({ kind: "answer", actorId: "lotte", docId: "overtime-be", otherDocId: "conv-qa-overtime-hours", reason: hours.question });
+    expect(n).toMatchObject({ kind: "answer", actorId: "lotte", docId: "overtime-be", otherDocId: String(hours.id), reason: hours.question });
 
+    // Marc isn't on that chat: he reads the answer on its own page, without who asked.
     const world = await loadWorld();
-    const doubt = lineDoubts(world, world.docs.find((d) => d.id === "overtime-be")!, Date.now(), [hours]).find((d) => d.kind === "answer")!;
-    expect(doubt).toMatchObject({ tone: "bad", chat: { conversationId: "conv-qa-overtime-hours", messageId: hours.answerMessageId } });
+    const marc = (await findPerson({ id: "marc" }))!;
+    const doubt = lineDoubts(world, world.docs.find((d) => d.id === "overtime-be")!, Date.now(), [viewOf(hours, marc)]).find((d) => d.kind === "answer")!;
+    expect(doubt).toMatchObject({ tone: "bad", answer: { href: `/board/answers/${hours.id}` } });
+    expect(doubt.text).toMatch(/^Lotte Peeters answered a colleague differently in chat/);
     expect((await docDetail("overtime-be", jonas))!.answers[0]).toMatchObject({ id: hours.id, conflict: { docId: "overtime-be" } });
   });
 
-  test("a new question and answer sent in TrustDrive is kept, and found by the next person who asks", async () => {
+  test("a new question and answer sent in TrustDrive is kept, shared once the answerer agrees, and found by the next person", async () => {
     const { conversationId } = await sendMessage(jonas, { source: "teams", to: [{ personId: "wout", name: "" }], body: "How do we reset a clocking terminal that shows error E42?" });
-    await sendMessage((await findPerson({ id: "wout" }))!, { conversationId, source: "teams", to: [], body: "Hold the reset button for 10 seconds until the screen restarts, then sync the badges again." });
+    await sendMessage(wout, { conversationId, source: "teams", to: [], body: "Hold the reset button for 10 seconds until the screen restarts, then sync the badges again." });
     await captureAnswers();
     const kept = (await loadAnswers()).find((a) => a.conversationId === conversationId)!;
-    expect(kept).toMatchObject({ askerId: "jonas", answererId: "wout", topics: expect.arrayContaining(["clocking"]) });
+    expect(kept).toMatchObject({ askerId: "jonas", answererId: "wout", sharing: "pending", topics: expect.arrayContaining(["clocking"]) });
+    expect((await experts("clocking terminal error", karim)).answers.map((a) => a.id)).not.toContain(kept.id);
+    await decideSharing(wout, [kept.id], true);
 
     const r = await experts("clocking terminal error", karim);
-    expect(r.answers.map((a) => a.id)).toContain(kept.id);
-    const wout = r.experts.find((e) => e.personId === "wout")!;
-    expect(wout.answers).toBe(1);
+    const seen = r.answers.find((a) => a.id === kept.id)!;
+    // Karim isn't on the chat: no asker, no chat title (their names), no way into the chat.
+    expect(seen).toMatchObject({ askerId: undefined, conversationTitle: "a Teams chat", canOpen: false, href: `/board/answers/${kept.id}` });
+    expect(viewOf(kept, jonas)).toMatchObject({ askerId: "jonas", canOpen: true, href: expect.stringContaining(`/conversations?c=${conversationId}`) });
+    const asExpert = r.experts.find((e) => e.personId === "wout")!;
+    expect(asExpert.answers).toBe(1);
     const profile = (await personProfile("wout", karim))!;
     expect(profile.answers.map((a) => a.id)).toContain(kept.id);
     expect(profile.topics.find((t) => t.key === "topic:clocking")!.answers).toBe(1);
     // Asking says nothing about what someone knows.
     expect(r.experts.map((e) => e.personId)).not.toContain("jonas");
     expect((await personProfile("jonas", karim))!.topics.map((t) => t.key)).not.toContain("topic:clocking");
+  });
+
+  test("keeping an answer private deletes it; never keeping means it isn't stored at all", async () => {
+    const { conversationId } = await sendMessage(jonas, { source: "teams", to: [{ personId: "tom", name: "" }], body: "How long do we keep payslips for employees who left?" });
+    const tom = (await findPerson({ id: "tom" }))!;
+    await sendMessage(tom, { conversationId, source: "teams", to: [], body: "Payslips are kept for five years after the employee leaves." });
+    await captureAnswers();
+    const pending = (await loadAnswers()).find((a) => a.conversationId === conversationId)!;
+    await decideSharing(tom, [pending.id], false);
+    expect((await loadAnswers()).some((a) => a.conversationId === conversationId)).toBe(false);
+
+    await setSharingPreference(tom, "never");
+    await sendMessage(jonas, { conversationId, source: "teams", to: [], body: "And timesheets, how long do we keep those?" });
+    await sendMessage((await findPerson({ id: "tom" }))!, { conversationId, source: "teams", to: [], body: "Timesheets are kept for five years as well." });
+    await captureAnswers();
+    expect((await loadAnswers()).some((a) => a.conversationId === conversationId)).toBe(false);
   });
 
   test("answering questions puts someone forward: Lotte now knows Belgian overtime", async () => {
@@ -138,9 +177,11 @@ describe("writing answers up as an FAQ", () => {
 
     const draft = (await faqDraft("overtime", lotte))!;
     expect(draft.answers).toHaveLength(3);
-    const md = composeFaqMarkdown("Overtime – questions & answers", draft.answers, "Lotte Peeters", (id) => id);
+    const md = composeFaqMarkdown("Overtime – questions & answers", draft.answers, "Lotte Peeters");
     expect(md).toContain("**Q: Within which period does recovery time for overtime have to be granted?**");
-    expect(md).toMatch(/A: Recovery time has to be granted within the reference period of 3 months\..*\(\[chat\]\(\/conversations\?c=conv-qa-overtime-recovery&m=\d+&q=/);
+    // A shared document links to the answer's own page, never into the private chat.
+    expect(md).toMatch(/A: Recovery time has to be granted within the reference period of 3 months\..*\(\[source\]\(\/board\/answers\/\d+ /);
+    expect(md).not.toContain("/conversations");
   });
 
   test("written up or dismissed, the suggestion goes away", async () => {
@@ -163,5 +204,69 @@ describe("contradictions stay current", () => {
     const detail = (await docDetail("overtime-be", jonas))!;
     expect(detail.doubts.some((d) => d.kind === "answer")).toBe(false);
     expect(detail.answers.every((a) => !a.conflict)).toBe(true);
+  });
+});
+
+describe("the message board", () => {
+  test("seeded: a solved question counts more for whoever solved it", async () => {
+    await captureAnswers();
+    const solved = (await loadAnswers()).find((a) => a.conversationId === "board-absence-relapse")!;
+    expect(solved).toMatchObject({ source: "board", answererId: "wout", askerId: "sofie", sharing: "shared", confirmed: true });
+    const view = viewOf(solved, karim);
+    expect(view).toMatchObject({ askerId: "sofie", canOpen: true, href: `/board/board-absence-relapse#m${solved.answerMessageId}` });
+  });
+
+  test("a question nobody answered for two days goes to the next people who know", async () => {
+    await askNextWhenUnanswered();
+    const [t] = await loadBoard(["board-parttime-bonus"]);
+    expect(t.askedIds[0]).toBe("karim");
+    expect(t.askedIds.length).toBeGreaterThan(1);
+    const next = t.askedIds[1];
+    expect((await listNotifications(next)).items[0]).toMatchObject({ kind: "question", actorId: "jonas", docId: "board-parttime-bonus", reason: expect.stringMatching(/^Nobody has answered yet\./) });
+    // Asked again later, not on every visit.
+    await askNextWhenUnanswered();
+    expect((await loadBoard(["board-parttime-bonus"]))[0].askedIds).toEqual(t.askedIds);
+  });
+
+  test("ask, get routed to who knows, answer, mark it solved", async () => {
+    // Marc fixed the overtime policy in an earlier test, so he's up to date again and asked too.
+    const { id, asked } = await askQuestion(emma, { title: "How is overtime on Sundays paid for part-timers in Belgium?" });
+    expect(asked).toContain("lotte");
+    expect(asked.length).toBeLessThanOrEqual(3);
+    expect((await listNotifications("lotte")).items[0]).toMatchObject({ kind: "question", actorId: "emma", docId: id });
+
+    await reply(lotte, id, "Part-timers get the same overtime premium: +100% on Sundays and public holidays.");
+    expect((await listNotifications("emma")).items[0]).toMatchObject({ kind: "board_answer", actorId: "lotte", docId: id });
+    await captureAnswers();
+    const answer = (await loadAnswers()).find((a) => a.conversationId === id)!;
+    expect(answer).toMatchObject({ source: "board", sharing: "shared", confirmed: false, answererId: "lotte" });
+
+    await expect(markSolved(karim, id, answer.answerMessageId)).rejects.toMatchObject({ status: 403 });
+    await markSolved(emma, id, answer.answerMessageId);
+    expect((await loadAnswers()).find((a) => a.id === answer.id)!.confirmed).toBe(true);
+    const lotteOvertime = (await personProfile("lotte", karim))!.topics.find((t) => t.key === "topic:overtime")!;
+    expect(lotteOvertime.evidence.some((e) => e.action === "Solved a question on the board:" && e.answer?.href.startsWith(`/board/${id}`))).toBe(true);
+
+    const thread = (await boardThread(id, karim))!;
+    expect(thread.thread.solvedMessageId).toBe(answer.answerMessageId);
+    expect(thread.related!.answers.every((a) => a.conversationId !== id)).toBe(true);
+  });
+
+  test("the board lists its questions and the answers shared from chats", async () => {
+    const { questions, fromChats } = await boardList(jonas);
+    expect(questions.map((q) => q.id)).toEqual(expect.arrayContaining(["board-absence-relapse", "board-vakantiegeld-13th", "board-parttime-bonus"]));
+    expect(questions.find((q) => q.id === "board-absence-relapse")).toMatchObject({ solved: true, answers: 1 });
+    expect(fromChats.length).toBe(sharedOnly(await loadAnswers()).filter((a) => a.source !== "board").length);
+    expect(fromChats.every((a) => a.source !== "board")).toBe(true);
+    // Board threads aren't mail or chats.
+    expect((await loadConversations()).some((c) => c.id.startsWith("board-"))).toBe(false);
+  });
+});
+
+describe("folders on the profile", () => {
+  test("where someone works, and (separately) where they read a lot", async () => {
+    expect((await personProfile("lotte", jonas))!.worksIn.length).toBeGreaterThan(0);
+    const nina = (await personProfile("nina", jonas))!;
+    expect(nina.oftenOpens).toContainEqual({ id: "f-payroll", label: "Payroll", opens: 3 });
   });
 });

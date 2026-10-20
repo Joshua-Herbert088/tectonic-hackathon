@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
 import { AnswerCard, EvidenceList } from "@/components/Expertise";
 import { FaqSuggestions } from "@/components/FaqSuggestions";
+import { ShareAnswers } from "@/components/ShareAnswers";
 import { ConfidentialPill, StatusPill } from "@/components/StatusPill";
 import { Avatar } from "@/components/TopBar";
 import { ContactLinks } from "@/components/WhoToContact";
@@ -69,7 +70,7 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
           {error ? (
             <div className="text-center">
               <p>{error}</p>
-              <Link href="/people" className="mt-2 inline-block text-blue-700 hover:underline">Who knows…?</Link>
+              <Link href="/ask" className="mt-2 inline-block text-blue-700 hover:underline">Ask</Link>
             </div>
           ) : "Loading the profile…"}
         </div>
@@ -77,13 +78,13 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
     );
   }
 
-  const nothing = !data.topics.length && !data.clients.length && !data.inCharge.length && !data.answers.length;
+  const nothing = !data.topics.length && !data.clients.length && !data.inCharge.length && !data.answers.length && !data.waiting.length;
   return (
     <AppShell>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-4">
           <section className="rounded-2xl bg-white p-6">
-            <Link href="/people" className="text-sm text-blue-700 hover:underline">← Who knows…?</Link>
+            <Link href="/ask" className="text-sm text-blue-700 hover:underline">← Ask</Link>
             <div className="mt-4 flex items-center gap-4">
               <Avatar person={p} size={56} />
               <div className="min-w-0 flex-1">
@@ -101,11 +102,37 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
               <Stat value={data.stats.conversations} label="client conversations" />
               <Stat value={data.stats.decisions} label="exceptions explained" />
             </div>
+            {(data.worksIn.length > 0 || data.oftenOpens.length > 0) && (
+              <div className="mt-4 space-y-1.5 text-xs text-slate-600">
+                {data.worksIn.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="w-24 shrink-0 text-slate-500">Works mostly in</span>
+                    {data.worksIn.map((f) => (
+                      <Link key={f.id} href={`/drive?folder=${f.id}`} className="rounded-full bg-slate-100 px-2.5 py-0.5 text-slate-700 hover:bg-[#e8f0fe] hover:text-[#0b57d0]">{f.label}</Link>
+                    ))}
+                  </div>
+                )}
+                {data.oftenOpens.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="w-24 shrink-0 text-slate-500">Often opens</span>
+                    {data.oftenOpens.map((f) => (
+                      <Link key={f.id} href={`/drive?folder=${f.id}`} className="rounded-full border border-slate-200 px-2.5 py-0.5 text-slate-600 hover:border-[#0b57d0]" title={`${f.opens} times in the last three months`}>
+                        {f.label} <span className="text-slate-400">· {f.opens}×</span>
+                      </Link>
+                    ))}
+                    <span className="text-[11px] text-slate-400">reading, so it doesn&apos;t count as knowing it</span>
+                  </div>
+                )}
+              </div>
+            )}
             <p className="mt-4 text-[11px] text-slate-500">
               {own ? "Your profile is built from your work in TrustDrive, so you never have to update it. Take off anything that isn't you any more." : `Built from ${first}'s work in TrustDrive: nobody typed this in. Every line links to where it comes from.`}
             </p>
             {p.active && <MentorRow personId={p.id} own={own} />}
           </section>
+
+          {own && data.sharing && <SharingSetting value={data.sharing} onChanged={() => setReload((n) => n + 1)} />}
+          {data.waiting.length > 0 && <ShareAnswers answers={data.waiting} onDone={() => setReload((n) => n + 1)} />}
 
           {!p.active && (
             <section className="rounded-2xl bg-[#fef7e0] p-5 text-sm text-[#7a4a00]">
@@ -168,7 +195,7 @@ function PersonProfile({ personId, viewerId }: { personId: string; viewerId: str
           {data.answers.length > 0 && (
             <section className="rounded-2xl bg-white p-6">
               <h2 className="text-lg text-slate-900">Answered recently</h2>
-              <p className="mb-3 text-[11px] text-slate-500">Questions colleagues asked {own ? "you" : first} in email or Teams, kept so the next person finds the answer.</p>
+              <p className="mb-3 text-[11px] text-slate-500">Questions colleagues asked {own ? "you" : first} on the board or in chats (shared by {own ? "you" : first}), kept so the next person finds the answer.</p>
               <div className="space-y-3">
                 {data.answers.map((a) => (
                   <AnswerCard key={a.id} a={a} />
@@ -278,6 +305,52 @@ function Colleague({ id, shared }: { id: string; shared: Profile["worksWith"][nu
   );
 }
 
+const SHARING = [
+  { id: "ask", label: "Ask me first", note: "You're asked, quietly, before an answer you gave in a chat is shared." },
+  { id: "always", label: "Always share", note: "Your answers in chats are shared right away, without who asked." },
+  { id: "never", label: "Never keep", note: "Answers you give in chats aren't kept at all. Answers on the board are always public." },
+] as const;
+
+/** What happens to the answers the viewer gives in private chats. */
+function SharingSetting({ value, onChanged }: { value: "ask" | "always" | "never"; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = async (answerSharing: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/me/sharing", { method: "PUT", body: JSON.stringify({ answerSharing }) });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not change it.");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="rounded-2xl bg-white p-5">
+      <h2 className="text-sm font-medium text-slate-900">Answers you give in chats</h2>
+      <div role="radiogroup" className="mt-2 flex flex-wrap gap-1.5">
+        {SHARING.map((o) => (
+          <button
+            key={o.id}
+            role="radio"
+            aria-checked={value === o.id}
+            disabled={busy}
+            onClick={() => value !== o.id && set(o.id)}
+            className={`rounded-full px-3 py-1 text-xs font-medium ring-1 disabled:opacity-60 ${value === o.id ? "bg-[#c2e7ff] text-slate-900 ring-[#c2e7ff]" : "text-slate-700 ring-slate-300 hover:bg-slate-50"}`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[11px] text-slate-500">{SHARING.find((o) => o.id === value)?.note}</p>
+      {error && <div className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>}
+    </section>
+  );
+}
+
 function Status({ p }: { p: Person }) {
   const { teamName } = useApp();
   if (!p.active) return <span className="text-[#c5221f]">left the company {p.leftAt ? timeAgo(p.leftAt) : ""}</span>;
@@ -354,7 +427,7 @@ function MentorRow({ personId, own }: { personId: string; own: boolean }) {
       {error && <div className="mt-1 text-xs text-red-700">{error}</div>}
       <p className="mt-1 text-[11px] text-slate-500">
         {mentor
-          ? `${mentor.id === viewerId ? "You" : mentor.name.split(" ")[0]} can see the questions ${own ? "you ask" : `${first} asks`} in Who knows…?, drive searches, the documents ${own ? "you open" : `${first} opens`} and questions to colleagues – from the day the mentorship started. Nobody is notified.`
+          ? `${mentor.id === viewerId ? "You" : mentor.name.split(" ")[0]} can see the questions ${own ? "you ask" : `${first} asks`} in Ask, drive searches, the documents ${own ? "you open" : `${first} opens`} and questions to colleagues – from the day the mentorship started. Nobody is notified.`
           : `A mentor can see what ${own ? "you ask" : `${first} asks`}, ${own ? "search for and open" : "searches for and opens"} from then on, to check in where it's needed. Nobody is notified.`}
       </p>
     </div>

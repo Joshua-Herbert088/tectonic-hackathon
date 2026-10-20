@@ -21,7 +21,9 @@ interface KeptAnswer {
   questionMessageId: number;
   answerMessageId: number;
   askerId: string;
+  answererId: string;
   topics: string[];
+  sharing: "pending" | "shared";
 }
 
 /** The connected mailbox and Teams chats: read them, import more, and turn a selection into a client handover document. */
@@ -320,20 +322,33 @@ function ConversationView({ c, answers, cited, onSent }: { c: Conversation; answ
   );
 }
 
-/** Under a message kept as an answer: whose question it answered, and where colleagues find it. */
+/** Under a message kept as an answer: whose question it answered, whether it's shared, and where colleagues find it. */
 function KeptChip({ a }: { a?: KeptAnswer }) {
-  const { person, taxonomy } = useApp();
+  const { person, taxonomy, viewerId } = useApp();
   if (!a) return null;
   const topic = taxonomy.mostSpecific(a.topics)[0];
   const label = topic ? taxonomy.tagLabel(topic) : null;
+  if (a.sharing === "pending") {
+    return (
+      <div className="mt-1 text-[11px] text-slate-500">
+        {a.answererId === viewerId ? (
+          <>
+            Could help others: <Link href="/#share" className="text-blue-700 hover:underline">share it?</Link>
+          </>
+        ) : (
+          `Not shared: ${person(a.answererId)?.name.split(" ")[0] ?? "they"} decides`
+        )}
+      </div>
+    );
+  }
   return (
     <div className="mt-1 text-[11px] text-slate-500">
-      Kept as the answer to {person(a.askerId)?.name.split(" ")[0] ?? "a colleague"}&apos;s question
+      Shared as the answer to {person(a.askerId)?.name.split(" ")[0] ?? "a colleague"}&apos;s question
       {label && (
         <>
           {" "}
           about{" "}
-          <Link href={`/people?q=${encodeURIComponent(label)}`} className="text-blue-700 hover:underline">
+          <Link href={`/ask?q=${encodeURIComponent(label)}`} className="text-blue-700 hover:underline">
             {label}
           </Link>
         </>
@@ -370,8 +385,8 @@ function KeepForOthers({ c, kept, onChanged }: { c: Conversation; kept: number; 
         {c.keepPrivate
           ? "Private: answers in this conversation aren't kept for colleagues."
           : kept
-            ? `${kept} answer${kept === 1 ? " is" : "s are"} kept for colleagues who ask the same thing, with a link back here.`
-            : "Answers to work questions in this conversation are kept for colleagues who ask the same thing."}
+            ? `${kept} answer${kept === 1 ? "" : "s"} found here. Whoever answered decides whether others see it; shared answers don't show who asked.`
+            : "Answers to work questions here can be shared with colleagues who ask the same thing, if whoever answered agrees."}
       </span>
       {onIt && (
         <button onClick={() => set(!c.keepPrivate)} disabled={busy} className="shrink-0 rounded-full px-3 py-1 font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50 disabled:opacity-60">

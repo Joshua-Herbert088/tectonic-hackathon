@@ -4,7 +4,7 @@ import { relevantPeople } from "./contacts";
 import { buildGovernanceSnapshot } from "./governance";
 import { lineDoubts } from "./doubts";
 import { findRedundant, substance, type SimilarDoc } from "./similarity";
-import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions } from "./answers";
+import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions, sharedOnly, viewOf, withLiveConflicts } from "./answers";
 import { dismissFaq, documentSources, insertScore, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
@@ -92,13 +92,14 @@ export async function docDetail(docId: string, viewer: Person) {
     buildGovernanceSnapshot(db, doc),
     loadAnswers(),
   ]);
+  const shared = sharedOnly(answers).map((a) => viewOf(a, viewer));
   return {
     doc,
     trust: freshOrNull(db, doc, viewer, latest),
     history,
     signals: buildSignals(db, doc, viewer),
-    doubts: lineDoubts(db, doc, Date.now(), answers),
-    answers: answersForDoc(db, doc, answers),
+    doubts: lineDoubts(db, doc, Date.now(), shared),
+    answers: answersForDoc(db, doc, shared),
     related: relatedDocs(db, doc).map((r) => summary(db, r, viewer, scores.get(r.id))),
     jevInput: buildJevState(db, doc, viewer),
     people,
@@ -125,11 +126,11 @@ export async function handoverBriefing(predecessorId: string, viewer: Person) {
   };
 }
 
-/** Everything expertise is worked out from, with answers in new messages captured first. */
-async function expertiseInputs() {
+/** Everything expertise is worked out from, with answers in new messages captured first. Only shared answers count. */
+export async function expertiseInputs() {
   await captureAnswers();
   const [db, history, conversations, answers] = await Promise.all([loadWorld(), loadHistory(), loadConversations(), loadAnswers()]);
-  return { db, conversations, answers, ledger: buildLedger(db, history, conversations, answers) };
+  return { db, conversations, answers, shared: sharedOnly(answers), ledger: buildLedger(db, history, conversations, sharedOnly(answers)) };
 }
 
 /**
@@ -173,14 +174,26 @@ export async function menteeDetail(menteeId: string, viewer: Person) {
   return { personId: mentee.id, ...(await menteeFor(db, mentee, conversations)) };
 }
 
-/** "Who knows X?": colleagues ranked by the evidence on what the question is about, and answers given before. An empty question gets starting points. */
+/**
+ * "Who knows X?": colleagues ranked by the evidence on what the question is about, answers given before,
+ * and the documents it's about (with the viewer's trust). An empty question gets starting points.
+ */
 export async function whoKnowsFor(query: string, viewer: Person) {
   if (!query.trim()) {
     const db = await loadWorld();
     return { suggestions: suggestions(db, myClients(viewer, db.clients)) };
   }
-  const { db, ledger, conversations, answers } = await expertiseInputs();
-  return whoKnows(db, ledger, conversations, answers, query, viewer);
+  const [{ db, ledger, conversations, shared }, scores] = await Promise.all([expertiseInputs(), latestScoresForViewer(viewer.id)]);
+  const { documentIds, ...result } = whoKnows(db, ledger, conversations, shared, query, viewer);
+  return { ...result, documents: documentIds.map((id) => db.docs.find((d) => d.id === id)!).map((d) => summary(db, d, viewer, scores.get(d.id))) };
+}
+
+/** A shared answer on its own page (or the viewer's own, waiting one); null when there's none they may see. */
+export async function answerPage(id: number, viewer: Person) {
+  await captureAnswers();
+  const [db, answers] = await Promise.all([loadWorld(), loadAnswers()]);
+  const a = answers.find((x) => x.id === id && (x.sharing === "shared" || x.answererId === viewer.id));
+  return a ? withLiveConflicts(db, [viewOf(a, viewer)])[0] : null;
 }
 
 /** Someone's expertise profile, built from their work; null when there's no such person. */
@@ -197,13 +210,13 @@ export async function faqDraft(topic: string, viewer: Person) {
   const [db, answers] = await Promise.all([loadWorld(), loadAnswers()]);
   const tax = taxonomyOf(db.terms);
   if (!tax.topic.has(topic)) return null;
-  return { topic, label: tax.tagLabel(topic), parent: tax.topic.get(topic)!.parent ?? null, answers: faqAnswers(db, answers, viewer.id, topic) };
+  return { topic, label: tax.tagLabel(topic), parent: tax.topic.get(topic)!.parent ?? null, answers: faqAnswers(db, answers, viewer, topic) };
 }
 
 /** "Not now": the viewer's answers on this topic stop counting towards an FAQ suggestion. */
 export async function dismissFaqSuggestion(topic: string, viewer: Person) {
   const [db, answers] = await Promise.all([loadWorld(), loadAnswers()]);
-  const ids = faqAnswers(db, answers, viewer.id, topic).map((a) => a.id);
+  const ids = faqAnswers(db, answers, viewer, topic).map((a) => a.id);
   await dismissFaq(ids, viewer.id);
   return { dismissed: ids.length };
 }
@@ -358,9 +371,11 @@ export async function homeFor(viewer: Person) {
     .map(row);
 
   // Questions the viewer keeps answering: worth writing up once instead of answering again.
-  const faqs = faqSuggestions(db, answers, viewer.id);
+  const faqs = faqSuggestions(db, answers.filter((a) => a.answererId === viewer.id), viewer.id);
+  // Answers they gave in chats that could help others, waiting for them to say so.
+  const toShare = withLiveConflicts(db, answers.filter((a) => a.answererId === viewer.id && a.sharing === "pending").map((a) => viewOf(a, viewer)));
 
-  return { viewer, mine, team, waiting, handovers: [...handovers.values()], impact, fresh, faqs };
+  return { viewer, mine, team, waiting, handovers: [...handovers.values()], impact, fresh, faqs, toShare };
 }
 
 /**

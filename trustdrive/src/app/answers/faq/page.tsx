@@ -11,13 +11,13 @@ import { Markdown } from "@/components/Markdown";
 import { TagDialog, type DocMeta } from "@/components/Tags";
 import { GLOBAL } from "@/lib/taxonomy";
 import { composeFaqMarkdown } from "@/lib/answerDoc";
-import type { Answer } from "@/lib/types";
+import type { AnswerView } from "@/lib/types";
 
 interface Draft {
   topic: string;
   label: string;
   parent: string | null;
-  answers: Answer[];
+  answers: AnswerView[];
 }
 
 /**
@@ -61,8 +61,7 @@ function FaqDraft() {
 
   const viewer = person(viewerId);
   const chosen = useMemo(() => draft?.answers.filter((a) => included.has(a.id)) ?? [], [draft, included]);
-  const nameOf = (id: string) => person(id)?.name ?? "a colleague";
-  const markdown = draft ? composeFaqMarkdown(title || draft.label, chosen, viewer?.name ?? "you", nameOf) : "";
+  const markdown = draft ? composeFaqMarkdown(title || draft.label, chosen, viewer?.name ?? "you") : "";
 
   const locations = [...new Set(chosen.flatMap((a) => a.locations))];
   const defaultMeta: DocMeta = {

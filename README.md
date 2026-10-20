@@ -73,42 +73,82 @@ Each document ranks up to 5 active colleagues, with the reasons shown (`src/lib/
 
 People who moved team rank lower and get a note. People who left the company are only listed as former contributors.
 
-### Who knows…? and profiles
-Sometimes the answer isn't a document but a person: who has dealt with this before, who really knows this client, who knows why we do it this way. **Who knows** (sidebar) answers that from work people already do, so there's no profile to fill in or keep up to date (`src/lib/expertise.ts`, `src/app/people/`, `src/app/person/[id]/`):
-- **Ask about a topic, a client or a country**, e.g. *overtime in Belgium*, *Noordkaai* or *wie kent de overuren?*. The question is matched to topics (by their names and keywords in four languages), clients and countries, and the page shows how it was read. If nothing is recognised, it searches the text of documents and conversations instead. Searching the drive shows the top three people above the results too.
-- **Evidence is only what someone produced:** owning a document, the share of its current text they wrote (from the line-level blame), edits, verifications, exceptions they kept on purpose with their reason, answers to colleagues' questions (below) and messages in client conversations. Reading a document or asking a question never counts. Every person comes with that evidence, linked to the document or message.
+### Ask: answers, documents and who knows, in one place
+Sometimes the answer isn't a document but a person: who has dealt with this before, who really knows this client, who knows why we do it this way. **Ask** (sidebar) takes one question and answers it from what's already there, cheapest first. Only if that isn't enough does it ask anyone. Nobody fills in a profile (`src/app/ask/`, `src/lib/expertise.ts`, `src/lib/board.ts`):
+1. **Asked before:** answers colleagues gave on the board, or in chats they chose to share (below).
+2. **In the drive:** the documents it's about, with your trust score.
+3. **Who knows:** the colleagues to ask directly, ranked by evidence, with email, Teams and profile links. Looking things up is private: nobody sees what you searched.
+4. **Already asked on the board:** open questions on the same topic, to follow instead of asking again.
+5. **Still stuck? Ask everyone:** post it to the board (below).
+
+Results update as you type, and the page shows how the question was read. Topics are matched by their names and keywords in four languages, plus clients and countries, e.g. *overtime in Belgium*, *Noordkaai* or *wie kent de overuren?*. If nothing is recognised, it searches the text instead. With nothing typed, the page shows the board, questions *asked to you* first. Searching the drive shows the top answer and three people above the results too, and old `/people` and `/board` links lead here.
+- **Evidence is only what someone produced:**
+  - owning a document, and the share of its current text they wrote (from the line-level blame)
+  - edits and verifications
+  - exceptions they kept on purpose, with their reason
+  - answers to colleagues' questions (below)
+  - messages in client conversations
+
+  Reading a document or asking a question never counts. Every person comes with that evidence, linked to the document or message.
 - **It stays current by itself:** evidence counts fully for three months, then half as much for every year after that. Ownership doesn't fade while someone is at the company. People who moved team get a note (and rank lower if they haven't worked on it since), and people who left are listed separately with a link to their handover briefing.
-- **Profile** (`/person/<id>`, or **Profile** next to any contact): the topics and clients someone knows, strongest first, each with its evidence and *fading* when nothing happened in a year; the documents they're in charge of; the exceptions they explained (*Knows why*); and who they work with most, through the same documents and conversations.
+- **Profile** (`/person/<id>`, or **Profile** next to any contact), all from their work:
+  - the topics and clients someone knows, strongest first, each with its evidence and *fading* when nothing happened in a year
+  - *Works mostly in*: the folders their work is in
+  - the questions they answered, and the documents they're in charge of
+  - the exceptions they explained (*Knows why*)
+  - who they work with most, through the same documents and conversations
+
+  *Often opens* shows the folders someone reads a lot in the last three months. It's per folder, labelled as reading, and never counted as expertise.
 - **"Not me any more":** on your own profile you can take a topic or client off; you're then no longer suggested for it, and only you still see it. That's the only human step.
 
-### Answers from email and Teams, kept for the next person
-When a colleague asks something by email or Teams and someone answers, the exchange is kept, so the next person with the same question finds the answer and who gave it (`src/lib/answers.ts`, run in the background after every message):
-- **What's kept:** in conversations among colleagues, a message ending in a question mark and the next reply by another colleague that actually says something (not "let me check", not a question back). The question and answer are quoted as written, with a link to the exact message. Client conversations aren't used: they have their own handover documents.
-- **Where it shows up:**
-  - *Asked before* on **Who knows** and above drive search results
-  - *Asked before in chat* next to **Who to contact** on a document about the same sub-topic
+### Posting to everyone: the board
+Most questions are asked in private chats, so the answer only helps one person. Posting from **Ask** puts the question on a board everyone can see, built so that asking there gets a quick answer you can trust (`src/lib/board.ts`, `src/app/board/[id]/`):
+- **Asked for you:** a posted question goes to the three colleagues ranked highest under *Who knows*, with a notification saying why them ("Answered a colleague in chat: …"). It isn't sent to everyone. If nobody has answered after two days, the next two are asked.
+- **Trustworthy answers:** answers are public, go through the conflict check like every answer (below), and the asker marks the one that **solved it**. A solved answer is labelled as such everywhere and counts more for whoever gave it.
+- **The board** (on **Ask**, with nothing typed): *Asked to you*, *Not answered yet*, *All questions*, *Yours*, and *Shared from chats*. That last tab has answers from private chats that the people who gave them chose to share.
+
+### Answers from email, Teams and the board, kept for the next person
+When a colleague asks something and someone answers, the exchange is kept, so the next person with the same question finds the answer and who gave it (`src/lib/answers.ts`, run in the background after every message):
+- **What's kept:**
+  - in chats among colleagues, a message ending in a question mark and the next reply by another colleague that actually says something (not "let me check", not a question back)
+  - on the board, every answer
+
+  Answers are quoted as written. Client conversations aren't used: they have their own handover documents.
+- **Private chats need the answerer's yes:** nothing from a chat is shared until the person who answered says so. They're asked quietly afterwards, never with a pop-up in the chat: a bell notification and *An answer you gave could help others* on **For you**, with **Share** and **Keep private** (which deletes it). On their profile they choose **Ask me first** (the default), **Always share** or **Never keep**. **Always share my answers** on the card does the same, so people can move to "always" once they trust it. Board answers are public from the start.
+- **The asker and the chat stay private:** for anyone not on the chat, a shared answer says "answered a colleague", hides the chat's title (which names its people) and links to the answer's own page instead of the conversation. Only the people on the chat can open it. FAQ documents also link to that page.
+- **Where answers show up:**
+  - *Asked before* on **Ask** and above drive search results
+  - *Asked before* next to **Who to contact** on a document about the same sub-topic
   - *Answered recently* on the profile of whoever answered
-  - a label under the message in **Conversations**
+  - a label under the message in **Conversations** ("Shared as the answer…" or "Not shared")
 
-  Each answer is marked *From chat, not verified*.
-- **It counts for whoever answered, not whoever asked.** "Answered Jonas's question about overtime" is evidence on Lotte's profile and in **Who knows**, so expertise that only lives in chats becomes findable.
-- **Checked against the drive:** each answer gets topics and a country (Jev, or the keyword rules) and goes through the conflict check. When it contradicts a document, the line is underlined there ("Lotte answered Jonas differently in chat"), the answer shows the contradiction, and the document's owner gets a notification with both lines. Once either is fixed, the warning goes away.
-- **From answers to a document:** someone who answered three questions on the same topic in a year gets *You keep answering the same questions* on **For you** and their profile. **Draft an FAQ** builds it from their own answers, each quoted and linked to its message, and saves it through the usual tag, conflict and duplicate checks. Answers a document contradicts start unticked. **Not now** hides the suggestion until new questions come in.
-- **Privacy:**
-  - A new chat among colleagues has *Keep answers for colleagues* in the compose window; untick it for anything personal.
-  - Anyone on a conversation can switch it to **Don't keep for others** later, which deletes what was kept from it.
-  - Exchanges with health information, bank or national numbers, or a colleague's full name are never kept.
+  Each answer is marked *Not verified* unless the asker said it solved their question.
+- **It counts for whoever answered, not whoever asked.** "Answered a colleague in chat: How many hours of voluntary overtime…?" is evidence on Lotte's profile and in **Ask**, so expertise that only lives in chats becomes findable.
+- **Checked against the drive:** each answer gets topics and a country (Jev, or the keyword rules) and goes through the conflict check. Once it's shared and contradicts a document:
+  - the document's line is underlined ("Lotte answered a colleague differently in chat")
+  - the answer shows the contradiction
+  - the document's owner gets a notification with both lines
 
-In the demo, Jonas, Sofie and Karim asked Lotte about Belgian overtime. One answer ("max 120 hours per calendar year now") contradicts the outdated overtime policy, whose owner Marc moved team. So Lotte now comes first for *overtime in Belgium*, Marc is told his policy may be out of date, and Lotte is offered an overtime FAQ. One chat is private and one is about a named colleague's salary; neither is kept.
+  Once either is fixed, the warning goes away.
+- **From answers to a document:** someone who answered three questions on the same topic in a year gets *You keep answering the same questions* on **For you** and their profile. **Draft an FAQ** builds it from their own answers, each quoted and linked, and saves it through the usual tag, conflict and duplicate checks. Answers a document contradicts start unticked. **Not now** hides the suggestion until new questions come in.
+- **Never kept:**
+  - exchanges with health information, bank or national numbers, or a colleague's full name
+  - conversations someone on them switched to **Don't keep for others**
+
+In the demo:
+- Jonas, Sofie and Karim asked Lotte about Belgian overtime in chats. Lotte always shares, so her answers are found straight away. One of them ("max 120 hours per calendar year now") contradicts the outdated overtime policy, whose owner Marc moved team. Lotte now comes first when you ask about *overtime in Belgium*, Marc is told his policy may be out of date, and Lotte is offered an overtime FAQ.
+- Lars answered Emma about vakantiegeld, and he's asked first: switch to Lars to see the card.
+- On the board, Sofie's absence-code question was solved by Wout, and Emma's vakantiegeld question has an answer. Jonas's year-end bonus question has gone unanswered for three days, so opening **Ask** asks the next colleagues.
+- Two chats are never kept: one is private, the other is about a named colleague's salary.
 
 ### Mentoring (buddy system)
 A newcomer gets a mentor, who can quietly keep an eye on where they're getting stuck and step in: *Jonas keeps asking about GDPR and his searches find nothing, so let's sit down about how Legal works.* Nobody is notified; the mentor checks in when they choose (`src/lib/mentoring.ts`, `src/app/mentoring/`).
 - **Assigning a mentor:** on anyone's profile (**Mentor → Assign a mentor / Change / Remove**), or on **Mentoring** (sidebar) with **Mentor someone**. Someone can't mentor themselves, mentor someone who mentors them, or be mentored by someone who left.
 - **What the mentor sees**, for each mentee, from the day the mentorship started (and only while it lasts):
-  - **What they asked:** questions in **Who knows…?**, and questions they wrote to colleagues by email or Teams (client conversations aren't included).
+  - **What they asked:** questions in **Ask**, and questions they wrote to colleagues by email or Teams (client conversations aren't included).
   - **What they searched for** in the drive, with how many documents matched; searches that found nothing stand out.
   - **What they looked at:** the documents they opened, how often, and the mentee's own trust score for each, so the mentor can tell when they were reading something they can't rely on.
-- **Where to step in:** all of it grouped by the department it's about: the team that maintains the documents, or the team whose topics or clients a question names (or whose words it uses; a question to someone in another department counts for that department). A department is highlighted as *may be struggling* when it keeps coming back: several questions or searches that found nothing, documents opened three times or more, or documents that score below 50 for them. It then suggests trusted documents in that area they haven't opened yet, and a **Who knows…?** link for its main topic to find someone to bring in.
+- **Where to step in:** all of it grouped by the department it's about: the team that maintains the documents, or the team whose topics or clients a question names (or whose words it uses; a question to someone in another department counts for that department). A department is highlighted as *may be struggling* when it keeps coming back: several questions or searches that found nothing, documents opened three times or more, or documents that score below 50 for them. It then suggests trusted documents in that area they haven't opened yet, and an **Ask** link for its main topic to find someone to bring in.
 - **Transparent to the mentee:** the mentee sees who their mentor is and exactly what that mentor can see, on **Mentoring** and on their profile. Activity is only recorded for people who have a mentor, and only their mentor can open it (anyone else gets a 403). It's kept apart from the views Jev reads, so it never changes a trust score.
 - In the demo, Lotte Peeters mentors Jonas Maes: switch **Viewing as** to Lotte and open **Mentoring**.
 

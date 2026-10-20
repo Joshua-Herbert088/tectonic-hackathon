@@ -27,6 +27,8 @@ export interface Person {
   /** Their mentor (buddy), who can see what they ask, search and open since `mentorSince`. */
   mentorId?: string;
   mentorSince?: string;
+  /** Answers they give in private chats: shared after asking them (the default), always, or never kept. */
+  answerSharing?: "ask" | "always" | "never";
   /** Set when the person moved to a different team; teamId is the current one. */
   previousTeamId?: string;
   movedTeamAt?: string;
@@ -97,12 +99,14 @@ export interface AnswerConflict {
   ownerId: string | null;
 }
 
-/** A question asked in an internal email or Teams chat, and the answer a colleague gave (see answers.ts). */
+/** A question asked in an internal email or Teams chat or on the message board, and an answer a colleague gave (see answers.ts). */
 export interface Answer {
   id: number;
   conversationId: string;
   conversationTitle: string;
-  source: "email" | "teams";
+  source: "email" | "teams" | "board";
+  /** Colleagues on the conversation (for a chat: who may open it). */
+  participantIds: string[];
   questionMessageId: number;
   answerMessageId: number;
   askerId: string;
@@ -117,8 +121,42 @@ export interface Answer {
   clientId?: string;
   conflict?: AnswerConflict;
   method: "jev" | "rules";
+  /** Chat answers wait for the person who answered to share them; board answers are public. */
+  sharing: "pending" | "shared";
+  /** On the board: the asker marked it as solving their question. */
+  confirmed: boolean;
   faqDocId?: string;
   faqDismissedAt?: string;
+}
+
+/**
+ * An answer as one viewer may see it. From a private chat, the asker stays anonymous and the chat can only
+ * be opened by the people on it; everyone else gets the answer's own page.
+ */
+export interface AnswerView extends Omit<Answer, "askerId" | "participantIds"> {
+  /** Unset when it's a private chat the viewer isn't on. */
+  askerId?: string;
+  /** Where to read it: the message itself, or the answer's own page. */
+  href: string;
+  /** The viewer can open the conversation it comes from. */
+  canOpen: boolean;
+}
+
+/** A question on the message board, with its answers (the thread's later messages). */
+export interface BoardThread {
+  id: string;
+  title: string;
+  askerId: string;
+  askedAt: string;
+  /** The question's details (the first message). */
+  question: Message;
+  replies: Message[];
+  topics: string[];
+  locations: Location[];
+  /** Colleagues asked to answer, in order. */
+  askedIds: string[];
+  lastAskedAt: string;
+  solvedMessageId?: number;
 }
 
 export interface Verification {
@@ -268,8 +306,8 @@ export interface Doubt {
   text: string;
   /** The other document's line, for contradictions. */
   source?: Conflict["existing"];
-  /** The answer in chat that says otherwise. */
-  chat?: { conversationId: string; messageId: number; title: string; answerLine: string };
+  /** The answer to a colleague's question that says otherwise, and where to read it. */
+  answer?: { href: string; line: string };
 }
 
 /** Why a document needs a new owner and who could take it over. */

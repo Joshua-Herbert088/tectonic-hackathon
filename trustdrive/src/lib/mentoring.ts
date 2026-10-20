@@ -7,7 +7,7 @@ import type { ActivityEvent, Conversation, Db, Doc, Person } from "./types";
  * Buddy system: a mentor sees what their mentee asked, searched for and opened since they became
  * their mentor, grouped by the department it's about, so they can step in where the newcomer is
  * struggling without anyone being notified. Everything here is computed from what was recorded:
- * "Who knows…?" questions, drive searches, documents opened, and questions the mentee wrote to
+ * Questions in Ask, drive searches, documents opened, and questions the mentee wrote to
  * colleagues in email or Teams.
  */
 
@@ -65,7 +65,7 @@ export interface StruggleArea {
   struggling: boolean;
   /** Plain reasons, for the mentor ("2 searches found nothing"). */
   reasons: string[];
-  /** The topic that comes up most, to ask "Who knows…?" about. */
+  /** The topic that comes up most, to look up in Ask. */
   topTopic?: { id: string; label: string };
   /** Trusted documents in this area they haven't opened yet: something to point them to. */
   startingPoints: { docId: string; title: string; score: number }[];

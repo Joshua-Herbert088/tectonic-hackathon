@@ -33,6 +33,8 @@ export const people = pgTable(
     mentorId: text("mentor_id").references((): AnyPgColumn => people.id),
     /** Since when: activity is only recorded, and shown to the mentor, from then on. */
     mentorSince: text("mentor_since"),
+    /** Answers they give in private chats: shared after asking them (ask), always, or never kept. */
+    answerSharing: text("answer_sharing").$type<"ask" | "always" | "never">().notNull().default("ask"),
   },
   // People are looked up by email.
   (t) => [uniqueIndex("people_email_idx").on(t.email)],
@@ -144,7 +146,7 @@ export const activity = pgTable(
   {
     id: serial("id").primaryKey(),
     personId: text("person_id").notNull().references(() => people.id, { onDelete: "cascade" }),
-    /** ask: a "Who knows…?" question · search: a drive search · open: a document opened */
+    /** ask: a question in Ask · search: a drive search · open: a document opened */
     kind: text("kind").$type<"ask" | "search" | "open">().notNull(),
     at: text("at").notNull(),
     query: text("query"),
@@ -233,10 +235,12 @@ export const notifications = pgTable(
     /**
      * edit: lines you wrote changed · doc_edit: your document changed · override: a save contradicts your
      * document · message: someone wrote to you (docId/docTitle are then the conversation, reason a preview) ·
-     * answer: an answer in chat contradicts your document (otherDocId/otherDocTitle are the conversation,
-     * reason the question)
+     * answer: an answer contradicts your document (otherDocId is the answer's id, otherDocTitle and reason
+     * the question) · question: you're asked to answer a board question (docId is the thread, reason why
+     * you) · board_answer: someone answered your board question · share: your answer in a chat could help
+     * others (docId is the conversation, otherDocId the answer's id)
      */
-    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message" | "answer">().notNull(),
+    kind: text("kind").$type<"edit" | "doc_edit" | "override" | "message" | "answer" | "question" | "board_answer" | "share">().notNull(),
     /** The document the recipient's information lives in (for messages: the conversation). */
     docId: text("doc_id").notNull(),
     docTitle: text("doc_title").notNull(),
@@ -256,7 +260,8 @@ export const conversations = pgTable(
   "conversations",
   {
     id: text("id").primaryKey(),
-    source: text("source").$type<"email" | "teams">().notNull(),
+    /** "board": a question on the message board (see boardThreads); the others are mail and chats. */
+    source: text("source").$type<"email" | "teams" | "board">().notNull(),
     title: text("title").notNull(),
     clientId: text("client_id").references(() => clients.id),
     importedById: text("imported_by_id").references(() => people.id),
@@ -321,11 +326,34 @@ export const answers = pgTable(
     /** The strongest contradiction with a document when it was captured. */
     conflict: jsonb("conflict").$type<AnswerConflict>(),
     method: text("method").$type<"jev" | "rules">().notNull(),
+    /**
+     * Whether others see it: chat answers wait for the person who answered (pending) unless they always
+     * share; board answers are public (shared).
+     */
+    sharing: text("sharing").$type<"pending" | "shared">().notNull().default("shared"),
     /** The FAQ document it was written up in. */
     faqDocId: text("faq_doc_id").references(() => documents.id, { onDelete: "set null" }),
     /** The person who answered chose not to write it up (for now). */
     faqDismissedAt: text("faq_dismissed_at"),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [uniqueIndex("answers_question_idx").on(t.questionMessageId), index("answers_answerer_idx").on(t.answererId)],
+  // A board question can have several answers; a chat question has one (its answer's first message).
+  (t) => [uniqueIndex("answers_answer_idx").on(t.answerMessageId), index("answers_question_idx").on(t.questionMessageId), index("answers_answerer_idx").on(t.answererId)],
 );
+
+/**
+ * A question on the message board. The thread itself is a conversation (source "board") whose first
+ * message is the question; this holds what's specific to the board.
+ */
+export const boardThreads = pgTable("board_threads", {
+  conversationId: text("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  /** Topic ids and countries suggested from the question, for listing and routing. */
+  topics: jsonb("topics").$type<string[]>().notNull(),
+  locations: jsonb("locations").$type<Location[]>().notNull(),
+  /** Colleagues who were asked to answer (notified), in order. */
+  askedIds: jsonb("asked_ids").$type<string[]>().notNull(),
+  /** When the last of them was asked: unanswered for a while, the next one is. */
+  askedAt: text("asked_at").notNull(),
+  /** The answer the asker marked as solving it. */
+  solvedMessageId: integer("solved_message_id").references(() => messages.id, { onDelete: "set null" }),
+});

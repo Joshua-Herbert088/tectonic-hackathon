@@ -7,7 +7,7 @@ import { Avatar } from "./TopBar";
 import type { Evidence, WhoKnows } from "@/lib/expertise";
 import { citationHref } from "@/lib/handoverDoc";
 import { timeAgo } from "@/lib/time";
-import type { Answer } from "@/lib/types";
+import type { AnswerView } from "@/lib/types";
 
 /** What someone did, linked to the document or conversation it happened in, and when. */
 export function EvidenceList({ evidence, className = "" }: { evidence: Evidence[]; className?: string }) {
@@ -20,6 +20,7 @@ export function EvidenceList({ evidence, className = "" }: { evidence: Evidence[
             {e.action}{" "}
             {e.doc && <Link href={`/doc/${e.doc.id}`} className="text-slate-800 hover:underline">{e.doc.title}</Link>}
             {e.conversation && <Link href={citationHref(e.conversation.id, e.conversation.messageId)} className="text-slate-800 hover:underline">{e.conversation.title}</Link>}
+            {e.answer && <Link href={e.answer.href} className="text-slate-800 hover:underline">“{e.answer.question}”</Link>}
             {e.at && <span className="text-slate-400"> · {timeAgo(e.at)}</span>}
             {e.detail && <span className="mt-0.5 block line-clamp-2 italic text-slate-500">{e.detail}</span>}
           </span>
@@ -30,22 +31,29 @@ export function EvidenceList({ evidence, className = "" }: { evidence: Evidence[
 }
 
 /**
- * A question a colleague asked in chat and the answer they got, quoted as written, with a link to the
- * exact message. Marked as unverified, and warns when a document says otherwise.
+ * A question a colleague asked and the answer they got, quoted as written, with a link to where it was
+ * said: the board, or the chat for the people on it. From someone else's chat, the asker stays anonymous.
+ * Marked as unverified (or solved, on the board), and warns when a document says otherwise.
  */
-export function AnswerCard({ a, className = "" }: { a: Answer; className?: string }) {
+export function AnswerCard({ a, className = "" }: { a: AnswerView; className?: string }) {
   const { person } = useApp();
   const asker = person(a.askerId);
   const answerer = person(a.answererId);
   const lines = a.answer.split("\n");
+  const where = a.source === "board" ? "on the board" : a.source === "email" ? "by email" : "in a Teams chat";
   return (
     <div className={`rounded-xl border border-slate-200 p-3 text-sm ${className}`}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
         <Avatar person={answerer} size={20} />
         <span>
-          <Link href={`/person/${a.answererId}`} className="font-medium text-slate-700 hover:underline">{answerer?.name ?? a.answererId}</Link> answered {asker?.name.split(" ")[0] ?? "a colleague"} in {a.source === "email" ? "an email" : "a Teams chat"} · {timeAgo(a.answeredAt)}
+          <Link href={`/person/${a.answererId}`} className="font-medium text-slate-700 hover:underline">{answerer?.name ?? a.answererId}</Link> answered {asker?.name.split(" ")[0] ?? "a colleague"} {where} · {timeAgo(a.answeredAt)}
         </span>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600" title="Answers in chat aren't checked like documents: confirm before relying on it">From chat, not verified</span>
+        {a.confirmed ? (
+          <span className="rounded-full bg-[#e6f4ea] px-2 py-0.5 text-[10px] font-medium text-[#137333]">Solved it, says {asker?.name.split(" ")[0] ?? "the asker"}</span>
+        ) : (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600" title="Answers aren't checked like documents: confirm before relying on it">Not verified</span>
+        )}
+        {a.sharing === "pending" && <span className="rounded-full bg-[#fef7e0] px-2 py-0.5 text-[10px] text-[#b06000]">Only you see this</span>}
       </div>
       <div className="mt-1.5 font-medium text-slate-900">“{a.question}”</div>
       <blockquote className="mt-1 space-y-0.5 border-l-2 border-[#5b5fc7] pl-3 text-slate-700">
@@ -59,7 +67,11 @@ export function AnswerCard({ a, className = "" }: { a: Answer; className?: strin
         </div>
       )}
       <div className="mt-2 flex flex-wrap gap-x-3 text-xs">
-        <Link href={citationHref(a.conversationId, a.answerMessageId, lines[0])} className="text-blue-700 hover:underline">Read it in the chat</Link>
+        {a.canOpen ? (
+          <Link href={a.href} className="text-blue-700 hover:underline">{a.source === "board" ? "Open the question" : "Read it in the chat"}</Link>
+        ) : (
+          <span className="text-slate-500">Quoted word for word; the chat itself is private.</span>
+        )}
         {a.faqDocId && <Link href={`/doc/${a.faqDocId}`} className="text-blue-700 hover:underline">Written up in an FAQ</Link>}
       </div>
     </div>
@@ -69,7 +81,7 @@ export function AnswerCard({ a, className = "" }: { a: Answer; className?: strin
 /** Next to document search results: the colleagues who know most about what's being searched for. */
 export function ExpertsStrip({ query }: { query: string }) {
   const { person, viewerId } = useApp();
-  const [found, setFound] = useState<{ query: string; viewerId: string; experts: WhoKnows["experts"]; answer?: Answer } | null>(null);
+  const [found, setFound] = useState<{ query: string; viewerId: string; experts: WhoKnows["experts"]; answer?: AnswerView } | null>(null);
   const q = query.trim();
 
   useEffect(() => {
@@ -95,7 +107,7 @@ export function ExpertsStrip({ query }: { query: string }) {
       {a && (
         <div className="flex min-w-0 items-center gap-2">
           <span className="shrink-0 font-medium text-slate-700">Asked before:</span>
-          <Link href={citationHref(a.conversationId, a.answerMessageId, a.answer.split("\n")[0])} className="min-w-0 truncate text-slate-800 hover:underline" title={a.answer}>
+          <Link href={a.href} className="min-w-0 truncate text-slate-800 hover:underline" title={a.answer}>
             “{a.question}” – {person(a.answererId)?.name.split(" ")[0] ?? "a colleague"} answered {timeAgo(a.answeredAt)}
           </Link>
           {a.conflict && <span className="shrink-0 rounded-full bg-[#fce8e6] px-2 py-0.5 text-[10px] text-[#a50e0e]">a document says otherwise</span>}
@@ -113,7 +125,7 @@ export function ExpertsStrip({ query }: { query: string }) {
               </Link>
             );
           })}
-          <Link href={`/people?q=${encodeURIComponent(q)}`} className="text-blue-700 hover:underline">Why them? →</Link>
+          <Link href={`/ask?q=${encodeURIComponent(q)}`} className="text-blue-700 hover:underline">Why them? →</Link>
         </div>
       )}
     </div>

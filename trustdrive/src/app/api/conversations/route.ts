@@ -13,7 +13,7 @@ export const GET = handle(async (req) => {
   const [conversations, answers] = await Promise.all([loadConversations(), loadAnswers()]);
   return Response.json({
     conversations,
-    answers: answers.map((a) => ({ id: a.id, conversationId: a.conversationId, questionMessageId: a.questionMessageId, answerMessageId: a.answerMessageId, askerId: a.askerId, topics: a.topics })),
+    answers: answers.filter((a) => a.source !== "board").map((a) => ({ id: a.id, conversationId: a.conversationId, questionMessageId: a.questionMessageId, answerMessageId: a.answerMessageId, askerId: a.askerId, answererId: a.answererId, topics: a.topics, sharing: a.sharing })),
   });
 });
 

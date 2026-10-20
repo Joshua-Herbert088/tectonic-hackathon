@@ -27,6 +27,13 @@ const nextConfig: NextConfig = {
   // Loaded with Node's require instead of bundled: PGlite ships WebAssembly files, pg has optional native
   // bindings, and scripts/migrate.mjs needs drizzle-orm in node_modules of the standalone output.
   serverExternalPackages: ["@electric-sql/pglite", "pg", "drizzle-orm"],
+  // "Who knows" and the board became one page, Ask; old links (with their ?q=) still work.
+  async redirects() {
+    return [
+      { source: "/people", destination: "/ask", permanent: false },
+      { source: "/board", destination: "/ask", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

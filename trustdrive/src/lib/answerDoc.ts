@@ -1,5 +1,4 @@
-import { citationHref } from "./handoverDoc";
-import type { Answer, Conversation } from "./types";
+import type { AnswerView, Conversation } from "./types";
 
 /** The parts of answers.ts that pages need too; pure, so they run in the browser as well. */
 
@@ -11,16 +10,17 @@ const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "n
 const linkTitle = (s: string) => s.replace(/"/g, "”");
 
 /**
- * An FAQ written from answers someone gave colleagues in chat. Every answer is quoted as written and
- * links to the message it comes from, like a client handover document. The review page shows the same
- * markdown that's saved.
+ * An FAQ written from answers someone gave colleagues. Every answer is quoted as written and links to
+ * where anyone can read it: the board question, or the answer's own page (never into a private chat), and
+ * who asked from a chat isn't named. The review page shows the same markdown that's saved.
  */
-export function composeFaqMarkdown(title: string, answers: Answer[], answererName: string, nameOf: (personId: string) => string) {
-  const out = [`# ${title}`, "", `Questions colleagues asked ${answererName} by email and Teams, with the answers as written. Each answer links to the message it's quoted from.`];
+export function composeFaqMarkdown(title: string, answers: AnswerView[], answererName: string) {
+  const out = [`# ${title}`, "", `Questions colleagues asked ${answererName}, with the answers as written. Each answer links to where it was given.`];
   for (const a of answers) {
     const lines = a.answer.split("\n");
-    const where = `${a.source === "email" ? "Email" : "Teams chat"} “${a.conversationTitle}” – asked by ${nameOf(a.askerId)}, ${day(a.answeredAt)}`;
-    out.push("", `**Q: ${a.question}**`, `A: ${lines.join(" ")} ([chat](${citationHref(a.conversationId, a.answerMessageId, lines[0])} "${linkTitle(where)}"))`);
+    const where = `${a.source === "board" ? "Answered on the board" : a.source === "email" ? "Answered by email" : "Answered in a Teams chat"}, ${day(a.answeredAt)}`;
+    const href = a.source === "board" ? a.href : `/board/answers/${a.id}`;
+    out.push("", `**Q: ${a.question}**`, `A: ${lines.join(" ")} ([source](${href} "${linkTitle(where)}"))`);
   }
   return out.join("\n") + "\n";
 }

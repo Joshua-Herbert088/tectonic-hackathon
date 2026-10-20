@@ -62,6 +62,8 @@ function Nav({ compact }: { compact: boolean }) {
   const client = params.get("client");
   const isActive = (href: string) => {
     const [path, query] = href.split("?");
+    // A question on the board belongs to Ask.
+    if (path === "/ask") return pathname === "/ask" || pathname.startsWith("/board");
     if (path !== pathname) return false;
     if (path !== "/drive") return true;
     const q = new URLSearchParams(query);
@@ -132,7 +134,7 @@ function Nav({ compact }: { compact: boolean }) {
         {item("/drive", "Drive", "folder")}
         {item("/drive?view=attention", "Needs attention", "warning")}
         {item("/drive?view=radar", "Handover radar", "handover")}
-        {item("/people", "Who knows", "person")}
+        {item("/ask", "Ask", "forum")}
         {item("/mentoring", "Mentoring", "mentor")}
         {item("/conversations", "Conversations", "chat")}
         {item("/company", "Company & tags", "tag")}

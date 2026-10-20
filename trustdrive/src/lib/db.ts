@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -11,10 +11,10 @@ import { Pool } from "pg";
 import * as schema from "@/db/schema";
 import { config } from "./config";
 import { log } from "./log";
-import { buildConversations, buildSeed, seedActivity, seedHistory } from "./seed";
+import { buildBoard, buildConversations, buildSeed, seedActivity, seedHistory } from "./seed";
 import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
 import { formatLocations } from "./appliesTo";
-import type { ActivityEvent, Answer, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
+import type { ActivityEvent, Answer, BoardThread, Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
 
 /**
  * Database access. Postgres everywhere: any Postgres server when DATABASE_URL is set, otherwise
@@ -116,6 +116,24 @@ async function insertConversations(tx: Tx, conversations: ReturnType<typeof buil
   }
 }
 
+async function insertBoard(tx: Tx, threads: ReturnType<typeof buildBoard>, people: { id: string; name: string; email?: string }[]) {
+  const who = (id: string) => {
+    const p = people.find((x) => x.id === id)!;
+    return { personId: p.id, authorName: p.name, authorEmail: p.email };
+  };
+  for (const t of threads) {
+    const authors = [t.askerId, ...t.replies.map((r) => r.personId)];
+    const participants = [...new Set(authors)].map((id) => ({ personId: id, name: who(id).authorName, email: who(id).authorEmail }));
+    await tx.insert(schema.conversations).values({ id: t.id, source: "board", title: t.title, createdAt: t.askedAt, participants });
+    const ids = await tx
+      .insert(schema.messages)
+      .values([{ ...who(t.askerId), conversationId: t.id, sentAt: t.askedAt, body: t.title }, ...t.replies.map((r) => ({ ...who(r.personId), conversationId: t.id, sentAt: r.sentAt, body: r.body }))])
+      .returning({ id: schema.messages.id });
+    const solved = t.solvedReply !== undefined ? ids[t.solvedReply + 1].id : null;
+    await tx.insert(schema.boardThreads).values({ conversationId: t.id, topics: t.topics, locations: t.locations, askedIds: t.askedIds, askedAt: t.askedAt, solvedMessageId: solved });
+  }
+}
+
 /**
  * Adds whatever part of the demo company isn't in the database yet – everything on first start, and
  * demo data added to seed.ts later – without touching existing rows.
@@ -137,13 +155,14 @@ async function syncSeed(orm: Orm) {
   const people = seed.people.filter((p) => !personIds.has(p.id));
   const clients = seed.clients.filter((c) => !clientIds.has(c.id));
   const conversations = buildConversations().filter((c) => !convIds.has(c.id));
+  const board = buildBoard().filter((t) => !convIds.has(t.id));
   // The example folders are only added to a drive that has no folders at all, so a single folder someone
   // deleted doesn't come back on the next start.
   // Parents come first in the seed, so inserting in order satisfies the parent reference.
   const folders = folderIds.size ? [] : seed.folders;
   const filed = new Set([...folderIds, ...folders.map((f) => f.id)]);
   const docs = seed.docs.filter((d) => !docIds.has(d.id)).map((d) => ({ ...d, folderId: d.folderId && filed.has(d.folderId) ? d.folderId : undefined }));
-  if (!teams.length && !people.length && !clients.length && !docs.length && !conversations.length && !folders.length && !terms.length) return;
+  if (!teams.length && !people.length && !clients.length && !docs.length && !conversations.length && !board.length && !folders.length && !terms.length) return;
 
   await orm.transaction(async (tx) => {
     if (teams.length) await tx.insert(schema.teams).values(teams);
@@ -162,6 +181,7 @@ async function syncSeed(orm: Orm) {
       }
     }
     await insertConversations(tx, conversations);
+    await insertBoard(tx, board, [...seed.people]);
     const newDocs = new Set(docs.map((d) => d.id));
     const overrides = seed.overrides.filter((o) => newDocs.has(o.docId)).map(({ id: _id, ...o }) => o);
     if (overrides.length) await tx.insert(schema.conflictOverrides).values(overrides);
@@ -170,14 +190,14 @@ async function syncSeed(orm: Orm) {
     const activity = seedActivity().filter((a) => newPeople.has(a.personId) && (!a.docId || newDocs.has(a.docId)));
     if (activity.length) await tx.insert(schema.activity).values(activity);
   });
-  log.info("demo data added", { teams: teams.length, people: people.length, clients: clients.length, docs: docs.length, conversations: conversations.length, folders: folders.length, terms: terms.length });
+  log.info("demo data added", { teams: teams.length, people: people.length, clients: clients.length, docs: docs.length, conversations: conversations.length, board: board.length, folders: folders.length, terms: terms.length });
 }
 
 /** Wipes everything and loads the demo company again. Only offered in demo mode. */
 export async function resetDb() {
   const orm = await db();
   await orm.transaction(async (tx) => {
-    for (const t of [schema.activity, schema.notifications, schema.answers, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+    for (const t of [schema.activity, schema.notifications, schema.answers, schema.boardThreads, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
       await tx.delete(t);
     }
   });
@@ -592,11 +612,14 @@ function toMessage(m: typeof schema.messages.$inferSelect): Message {
   return { id: m.id, personId: m.personId ?? undefined, authorName: m.authorName, authorEmail: m.authorEmail ?? undefined, sentAt: m.sentAt, body: m.body };
 }
 
-/** Conversations with their messages (oldest first), newest conversation activity first. */
+/** Email threads and Teams chats with their messages (oldest first), newest conversation activity first. Board threads: loadBoard. */
 export async function loadConversations(ids?: string[]): Promise<Conversation[]> {
   const orm = await db();
-  const q = orm.select().from(schema.conversations);
-  const convs = await (ids ? q.where(inArray(schema.conversations.id, ids.length ? ids : [""])) : q);
+  const notBoard = ne(schema.conversations.source, "board");
+  const convs = (await orm
+    .select()
+    .from(schema.conversations)
+    .where(ids ? and(notBoard, inArray(schema.conversations.id, ids.length ? ids : [""])) : notBoard)) as (typeof schema.conversations.$inferSelect & { source: Conversation["source"] })[];
   if (!convs.length) return [];
   const msgs = await orm
     .select()
@@ -658,29 +681,31 @@ export async function setAnswersThrough(conversationId: string, messageId: numbe
 
 export type NewAnswer = Omit<typeof schema.answers.$inferInsert, "id" | "createdAt">;
 
-/** Stores captured answers; a question that already has one is skipped. Returns the ids of the new ones. */
+/** Stores captured answers; an answer that's already stored is skipped. Returns the new ones. */
 export async function insertAnswers(rows: NewAnswer[]) {
   if (!rows.length) return [];
   const now = new Date().toISOString();
-  const inserted = await (await db())
+  return (await db())
     .insert(schema.answers)
     .values(rows.map((r) => ({ ...r, createdAt: now })))
-    .onConflictDoNothing({ target: schema.answers.questionMessageId })
-    .returning({ id: schema.answers.id, questionMessageId: schema.answers.questionMessageId });
-  return inserted;
+    .onConflictDoNothing({ target: schema.answers.answerMessageId })
+    .returning({ id: schema.answers.id, answerMessageId: schema.answers.answerMessageId });
 }
 
-/** Every captured answer, newest first, with its conversation's title and kind. */
+/** Every captured answer, shared or not, newest first, with its conversation's title, kind and colleagues. */
 export async function loadAnswers(): Promise<Answer[]> {
   const rows = await (await db())
-    .select({ a: schema.answers, title: schema.conversations.title, source: schema.conversations.source })
+    .select({ a: schema.answers, title: schema.conversations.title, source: schema.conversations.source, participants: schema.conversations.participants, solved: schema.boardThreads.solvedMessageId })
     .from(schema.answers)
     .innerJoin(schema.conversations, eq(schema.answers.conversationId, schema.conversations.id))
+    .leftJoin(schema.boardThreads, eq(schema.boardThreads.conversationId, schema.answers.conversationId))
     .orderBy(desc(schema.answers.answeredAt));
-  return rows.map(({ a: { createdAt: _created, ...a }, title, source }) => ({
+  return rows.map(({ a: { createdAt: _created, ...a }, title, source, participants, solved }) => ({
     ...a,
     conversationTitle: title,
     source,
+    participantIds: participants.flatMap((p) => (p.personId ? [p.personId] : [])),
+    confirmed: solved === a.answerMessageId,
     clientId: a.clientId ?? undefined,
     conflict: a.conflict ?? undefined,
     faqDocId: a.faqDocId ?? undefined,
@@ -694,10 +719,67 @@ export async function markAnswersInFaq(answerIds: number[], answererId: string, 
   await (await db()).update(schema.answers).set({ faqDocId: docId }).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
 }
 
+/** The person who answered shares their answers (or keeps them to themselves). Only their own answers are changed. */
+export async function setAnswerSharing(answerIds: number[], answererId: string, sharing: Answer["sharing"]) {
+  if (!answerIds.length) return;
+  await (await db()).update(schema.answers).set({ sharing }).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
+}
+
+/** Deletes answers someone chose to keep to themselves. Only their own answers. */
+export async function deleteAnswers(answerIds: number[], answererId: string) {
+  if (!answerIds.length) return;
+  await (await db()).delete(schema.answers).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
+}
+
+/** Ask me, always share, or never keep the answers someone gives in private chats. */
+export async function setPersonSharing(personId: string, answerSharing: "ask" | "always" | "never") {
+  await (await db()).update(schema.people).set({ answerSharing }).where(eq(schema.people.id, personId));
+}
+
 /** "Not now" on writing these answers up. Only their own answers are changed. */
 export async function dismissFaq(answerIds: number[], answererId: string) {
   if (!answerIds.length) return;
   await (await db()).update(schema.answers).set({ faqDismissedAt: new Date().toISOString() }).where(and(inArray(schema.answers.id, answerIds), eq(schema.answers.answererId, answererId)));
+}
+
+/** Posts a question on the board: a conversation (source "board") whose first message is the question. */
+export async function createBoardThread(t: { id: string; title: string; askerId: string; askerName: string; askerEmail?: string; body: string; at: string; topics: string[]; locations: Location[]; askedIds: string[] }) {
+  await (await db()).transaction(async (tx) => {
+    await tx.insert(schema.conversations).values({ id: t.id, source: "board", title: t.title, createdAt: t.at, participants: [{ personId: t.askerId, name: t.askerName, email: t.askerEmail }] });
+    await tx.insert(schema.messages).values({ conversationId: t.id, personId: t.askerId, authorName: t.askerName, authorEmail: t.askerEmail, sentAt: t.at, body: t.body });
+    await tx.insert(schema.boardThreads).values({ conversationId: t.id, topics: t.topics, locations: t.locations, askedIds: t.askedIds, askedAt: t.at });
+  });
+}
+
+/** Board questions with their replies, newest activity first. */
+export async function loadBoard(ids?: string[]): Promise<BoardThread[]> {
+  const orm = await db();
+  const q = orm.select({ c: schema.conversations, b: schema.boardThreads }).from(schema.boardThreads).innerJoin(schema.conversations, eq(schema.boardThreads.conversationId, schema.conversations.id));
+  const rows = await (ids ? q.where(inArray(schema.boardThreads.conversationId, ids.length ? ids : [""])) : q);
+  if (!rows.length) return [];
+  const msgs = await orm
+    .select()
+    .from(schema.messages)
+    .where(inArray(schema.messages.conversationId, rows.map((r) => r.c.id)))
+    .orderBy(asc(schema.messages.sentAt), asc(schema.messages.id));
+  const byThread = groupBy(msgs.map((m) => ({ ...toMessage(m), conversationId: m.conversationId })), (m) => m.conversationId);
+  return rows
+    .flatMap(({ c, b }) => {
+      const [question, ...replies] = (byThread.get(c.id) ?? []).map(({ conversationId: _c, ...m }) => m);
+      if (!question?.personId) return [];
+      return [{ id: c.id, title: c.title, askerId: question.personId, askedAt: question.sentAt, question, replies, topics: b.topics, locations: b.locations, askedIds: b.askedIds, lastAskedAt: b.askedAt, solvedMessageId: b.solvedMessageId ?? undefined }];
+    })
+    .sort((a, b) => (b.replies.at(-1)?.sentAt ?? b.askedAt).localeCompare(a.replies.at(-1)?.sentAt ?? a.askedAt));
+}
+
+/** The answer that solved it (or none). */
+export async function setSolved(threadId: string, messageId: number | null) {
+  await (await db()).update(schema.boardThreads).set({ solvedMessageId: messageId }).where(eq(schema.boardThreads.conversationId, threadId));
+}
+
+/** More colleagues asked to answer. */
+export async function setAsked(threadId: string, askedIds: string[], at: string) {
+  await (await db()).update(schema.boardThreads).set({ askedIds, askedAt: at }).where(eq(schema.boardThreads.conversationId, threadId));
 }
 
 /** Conversations a document was written from. */

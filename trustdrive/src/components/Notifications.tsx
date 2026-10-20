@@ -88,6 +88,19 @@ export function NotificationBell() {
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> answered a colleague differently from your document <span className="font-medium text-slate-900">{n.docTitle}</span>. Is your
                             document out of date, or the answer?
                           </>
+                        ) : n.kind === "question" ? (
+                          <>
+                            <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> asked a question you probably know: <span className="font-medium text-slate-900">{n.docTitle}</span>
+                          </>
+                        ) : n.kind === "board_answer" ? (
+                          <>
+                            <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> answered your question <span className="font-medium text-slate-900">{n.docTitle}</span>
+                            {n.reason && <div className="mt-1 line-clamp-2 rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">“{n.reason}”</div>}
+                          </>
+                        ) : n.kind === "share" ? (
+                          <>
+                            Your answer to <span className="font-medium text-slate-900">“{n.docTitle}”</span> could help colleagues with the same question. Share it?
+                          </>
                         ) : (
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> saved <span className="font-medium text-slate-900">{n.otherDocTitle}</span>, which contradicts what you wrote in{" "}
@@ -105,28 +118,29 @@ export function NotificationBell() {
                           ))}
                         </div>
                         {n.reason && n.kind === "answer" && <div className="mt-1.5 text-xs italic text-slate-600">The question: “{n.reason}”</div>}
-                        {n.reason && n.kind !== "message" && n.kind !== "answer" && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
+                        {n.reason && n.kind === "question" && <div className="mt-1.5 text-xs text-slate-600">Why you: {n.reason}</div>}
+                        {n.reason && (n.kind === "override" || n.kind === "edit" || n.kind === "doc_edit") && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
                         <div className="mt-2 flex gap-3 text-xs">
                           <button
                             onClick={() => {
                               markRead([n.id]);
                               setOpen(false);
-                              router.push(n.kind === "message" ? `/conversations?c=${n.docId}` : `/doc/${n.docId}`);
+                              router.push(n.kind === "message" ? `/conversations?c=${n.docId}` : n.kind === "question" || n.kind === "board_answer" ? `/board/${n.docId}` : n.kind === "share" ? "/#share" : `/doc/${n.docId}`);
                             }}
                             className="font-medium text-blue-700 hover:underline"
                           >
-                            Open {n.kind === "message" ? "conversation" : n.kind === "override" ? "your document" : "document"}
+                            {n.kind === "question" ? "Answer it" : n.kind === "board_answer" ? "Open your question" : n.kind === "share" ? "Decide" : `Open ${n.kind === "message" ? "conversation" : n.kind === "override" ? "your document" : "document"}`}
                           </button>
-                          {n.otherDocId && (
+                          {n.otherDocId && n.kind !== "share" && (
                             <button
                               onClick={() => {
                                 markRead([n.id]);
                                 setOpen(false);
-                                router.push(n.kind === "answer" ? `/conversations?c=${n.otherDocId}` : `/doc/${n.otherDocId}`);
+                                router.push(n.kind === "answer" ? `/board/answers/${n.otherDocId}` : `/doc/${n.otherDocId}`);
                               }}
                               className="text-blue-700 hover:underline"
                             >
-                              {n.kind === "answer" ? "Read the chat" : "Open their document"}
+                              {n.kind === "answer" ? "Read the answer" : "Open their document"}
                             </button>
                           )}
                           {!n.readAt && <button onClick={() => markRead([n.id])} className="text-slate-500 hover:underline">Mark as read</button>}

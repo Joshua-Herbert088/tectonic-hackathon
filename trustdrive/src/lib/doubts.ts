@@ -1,7 +1,7 @@
 import { checkConflicts, extractFacts } from "./conflicts";
 import { stripLinks } from "./lexicon";
 import { timeAgo } from "./time";
-import type { Answer, Db, Doc, Doubt } from "./types";
+import type { AnswerView, Db, Doc, Doubt } from "./types";
 
 /** A markdown line as the reader sees it. */
 function plain(line: string) {
@@ -12,11 +12,11 @@ function plain(line: string) {
 
 /**
  * Doubts that need no Jev call: lines that only mention past years, lines involved in a conflict
- * someone overrode, and lines a colleague contradicted when answering a question in chat (answers.ts).
+ * someone overrode, and lines a colleague contradicted when answering a question (answers.ts).
  * Stored overrides and answers are matched on the line's text, since the document may have been edited
  * since; if the line is gone, so is the doubt.
  */
-export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: Answer[] = []): Doubt[] {
+export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: AnswerView[] = []): Doubt[] {
   // Link addresses (source citations) aren't text: their ids must not look like years.
   const lines = stripLinks(doc.content).split("\n");
   const name = (id: string) => db.people.find((p) => p.id === id)?.name ?? "someone";
@@ -68,8 +68,8 @@ export function lineDoubts(db: Db, doc: Doc, now = Date.now(), answers: Answer[]
       lineText: plain(lines[lineNo - 1]),
       tone: "bad",
       kind: "answer",
-      text: `${name(a.answererId)} answered ${name(a.askerId)} differently in chat ${timeAgo(a.answeredAt, now)} – one of them is out of date`,
-      chat: { conversationId: a.conversationId, messageId: a.answerMessageId, title: a.conversationTitle, answerLine: a.conflict!.answerLine },
+      text: `${name(a.answererId)} answered ${a.askerId ? name(a.askerId) : "a colleague"} differently ${a.source === "board" ? "on the board" : "in chat"} ${timeAgo(a.answeredAt, now)} – one of them is out of date`,
+      answer: { href: a.href, line: a.conflict!.answerLine },
     });
   }
   return out;
