@@ -5,7 +5,9 @@ const CODE = "correct horse battery";
 
 describe("session cookie", () => {
   it("reads back who it was made for", () => {
-    expect(readSession(CODE, createSession(CODE, "lotte"))).toEqual({ viewerId: "lotte" });
+    expect(readSession(CODE, createSession(CODE, "lotte"))).toMatchObject({ viewerId: "lotte", sessionId: expect.any(String) });
+    // Switching who you view as keeps the session.
+    expect(readSession(CODE, createSession(CODE, "jonas", Date.now(), "abc"))).toEqual({ viewerId: "jonas", sessionId: "abc" });
   });
 
   it("is refused when missing, malformed, edited or signed with another code", () => {

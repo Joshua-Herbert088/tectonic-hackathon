@@ -3,6 +3,7 @@ import { DEFAULT_VIEWER, startSession } from "@/lib/auth";
 import { config } from "@/lib/config";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
+import { rateLimit } from "@/lib/rateLimit";
 import { codeMatches } from "@/lib/session";
 
 // Guessing the code is slowed down: after this many wrong codes in a minute, sign-in waits for the next
@@ -25,6 +26,8 @@ export const POST = handle(async (req) => {
     log.warn("sign-in with a wrong access code", { failuresThisMinute: failures.count });
     throw new HttpError(401, "That access code isn't right.");
   }
+  // Each sign-in is a new session with its own allowance; signing in over and over doesn't multiply it.
+  rateLimit("sign-in", 60, 60_000);
   await startSession(DEFAULT_VIEWER);
   return Response.json({ ok: true });
 });

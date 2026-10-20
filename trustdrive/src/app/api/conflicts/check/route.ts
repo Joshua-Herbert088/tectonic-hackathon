@@ -1,5 +1,5 @@
 import { canSee, redactConflicts } from "@/lib/access";
-import { requireViewer } from "@/lib/auth";
+import { requireViewer, sessionId } from "@/lib/auth";
 import { checkConflicts } from "@/lib/conflicts";
 import { loadWorld } from "@/lib/db";
 import { handle, readBody } from "@/lib/http";
@@ -11,7 +11,7 @@ import { GLOBAL } from "@/lib/taxonomy";
 export const POST = handle(async (req) => {
   const viewer = await requireViewer(req);
   // Each check can ask Jev, which is paid for.
-  limitWrites(viewer.id);
+  limitWrites(viewer.id, await sessionId());
   const body = await readBody(req, conflictDraft);
   const world = await loadWorld();
   // A document the viewer may not see is treated as unknown.

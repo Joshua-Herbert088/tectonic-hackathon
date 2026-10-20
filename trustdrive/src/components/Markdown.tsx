@@ -12,6 +12,9 @@ const MARK = {
   warn: { text: "bg-[#fef7e0] decoration-[#f9ab00]", active: "bg-[#fde293]", chip: "#b06000" },
 };
 
+/** Lines rendered at most; a longer document shows the rest in the editor. */
+export const MAX_RENDERED_LINES = 3000;
+
 /** Minimal markdown renderer for the seeded docs: headings, lists, tables, bold. */
 export function Markdown({
   text,
@@ -24,7 +27,8 @@ export function Markdown({
   activeLine?: number | null;
   onMark?: (lineNo: number) => void;
 }) {
-  const lines = text.split("\n");
+  const all = text.split("\n");
+  const lines = all.slice(0, MAX_RENDERED_LINES);
   const blocks: React.ReactNode[] = [];
   let i = 0;
 
@@ -115,6 +119,7 @@ export function Markdown({
       i++;
     }
   }
+  if (all.length > lines.length) blocks.push(<p key="more" className="my-3 text-sm italic text-slate-500">{(all.length - lines.length).toLocaleString()} more lines aren&apos;t shown here. Open the editor to see the whole document.</p>);
   // Long words and URLs wrap instead of running off the page.
   return <div className="text-[15px] text-slate-700 [overflow-wrap:anywhere]">{blocks}</div>;
 }

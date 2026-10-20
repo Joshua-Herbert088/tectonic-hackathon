@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { redactConflicts } from "@/lib/access";
-import { requireViewer } from "@/lib/auth";
+import { requireViewer, sessionId } from "@/lib/auth";
 import { createDocument, loadWorld, markAnswersInFaq, recordOverrides } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { notifyOverrides } from "@/lib/notify";
 import { limitWrites } from "@/lib/rateLimit";
 import { newDocument } from "@/lib/schemas";
 import type { ConflictCheck } from "@/lib/types";
-import { checkAppliesTo, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
+import { checkAppliesTo, checkStorage, checkTags, gateDraft, listDocs, redundancyCheck, requireTags } from "@/lib/service";
 
 export const GET = handle(async (req) => Response.json(await listDocs(await requireViewer(req))));
 
@@ -18,8 +18,8 @@ export const GET = handle(async (req) => Response.json(await listDocs(await requ
  */
 export const POST = handle(async (req) => {
   const viewer = await requireViewer(req);
-  limitWrites(viewer.id);
   const body = await readBody(req, newDocument);
+  limitWrites(viewer.id, await sessionId(), (body.title?.length ?? 0) + body.content.length);
   const world = await loadWorld();
   const title = body.title?.trim() ?? "";
   if (!title) throw new HttpError(400, "Give the document a name.");
@@ -42,6 +42,8 @@ export const POST = handle(async (req) => {
   if (!gate.ok) return Response.json({ ...gate.body, ...(gate.body.check ? { check: redactConflicts(world, gate.body.check as ConflictCheck, viewer) } : {}), similar }, { status: gate.status });
   if (similar.length) return Response.json({ error: "similar", similar, check: redactConflicts(world, gate.check, viewer) }, { status: 409 });
 
+  // Stored twice: the document and the first version in its history.
+  await checkStorage(world, viewer, { document: true, chars: 2 * (title.length + body.content.length) });
   const now = new Date().toISOString();
   const id = `doc-${crypto.randomUUID()}`;
   await createDocument(

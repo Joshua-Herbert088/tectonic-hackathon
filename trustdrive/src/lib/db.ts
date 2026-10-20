@@ -244,20 +244,38 @@ export async function loadWorld(): Promise<Db> {
     verifications: (verifsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
     views: (viewsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
   }));
-  const people = peopleRows.map((p) => ({
-    ...p,
-    leftAt: p.leftAt ?? undefined,
-    previousTeamId: p.previousTeamId ?? undefined,
-    movedTeamAt: p.movedTeamAt ?? undefined,
-    email: p.email ?? undefined,
-    phone: p.phone ?? undefined,
-    clientIds: p.clientIds ?? undefined,
-    hiddenExpertise: p.hiddenExpertise ?? undefined,
-    mentorId: p.mentorId ?? undefined,
-    mentorSince: p.mentorSince ?? undefined,
-  }));
-  const clients = clientRows.map((c) => ({ ...c, domain: c.domain ?? undefined }));
-  return { teams, people, docs, overrides, clients, folders: folderRows.map(toFolder), terms };
+  return { teams, people: peopleRows.map(toPerson), docs, overrides, clients: clientRows.map(toClient), folders: folderRows.map(toFolder), terms };
+}
+
+const toPerson = (p: typeof schema.people.$inferSelect) => ({
+  ...p,
+  leftAt: p.leftAt ?? undefined,
+  previousTeamId: p.previousTeamId ?? undefined,
+  movedTeamAt: p.movedTeamAt ?? undefined,
+  email: p.email ?? undefined,
+  phone: p.phone ?? undefined,
+  clientIds: p.clientIds ?? undefined,
+  hiddenExpertise: p.hiddenExpertise ?? undefined,
+  mentorId: p.mentorId ?? undefined,
+  mentorSince: p.mentorSince ?? undefined,
+});
+const toClient = (c: typeof schema.clients.$inferSelect) => ({ ...c, domain: c.domain ?? undefined });
+
+/** Teams, people, clients and the taxonomy – what every page needs – without loading any document. */
+export async function loadDirectory() {
+  const orm = await db();
+  const [teams, peopleRows, clientRows, terms] = await Promise.all([orm.select().from(schema.teams), orm.select().from(schema.people), orm.select().from(schema.clients), loadTerms()]);
+  return { teams, people: peopleRows.map(toPerson), clients: clientRows.map(toClient), terms };
+}
+
+/** Characters of text stored: live documents (trash included) and their edit history. For the storage quota. */
+export async function storedChars() {
+  const orm = await db();
+  const [[docs], [history]] = await Promise.all([
+    orm.select({ n: sql<number>`coalesce(sum(length(${schema.documents.content})), 0)::int` }).from(schema.documents),
+    orm.select({ n: sql<number>`coalesce(sum(length(${schema.edits.content})), 0)::int` }).from(schema.edits),
+  ]);
+  return { documents: Number(docs.n), history: Number(history.n) };
 }
 
 function toTermRow(t: Term) {
@@ -492,7 +510,7 @@ export async function updateDocument(docId: string, personId: string, patch: Doc
       next.lastEditedById = personId;
     }
     await tx.update(schema.documents).set(next).where(eq(schema.documents.id, docId));
-    await tx.insert(schema.edits).values({ docId, personId, at: now, title: next.title, content: next.content, status: next.status, location: formatLocations(next.locations), teamId: next.teamId });
+    await addSnapshot(tx, { docId, personId, at: now, title: next.title, content: next.content, status: next.status, location: formatLocations(next.locations), teamId: next.teamId });
     // Anyone who edits content becomes a collaborator.
     if (contentChanged && doc.ownerId !== personId) {
       await tx
@@ -501,6 +519,28 @@ export async function updateDocument(docId: string, personId: string, patch: Doc
         .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } });
     }
   });
+}
+
+/** Saving again within this long replaces the same person's last snapshot instead of adding one. */
+export const EDIT_COALESCE_MS = 10 * 60_000;
+/** A document keeps at most this many snapshots: the first (who wrote it) and the latest. */
+export const MAX_VERSIONS = 100;
+
+/**
+ * Adds a snapshot to a document's history, bounded: a quick series of saves by one person is one
+ * version (never the first, which records who created it), and beyond MAX_VERSIONS the oldest ones after
+ * the first are dropped. Blame then credits a dropped version's lines to the next one kept.
+ */
+async function addSnapshot(tx: Tx, snap: typeof schema.edits.$inferInsert) {
+  const versions = await tx.select({ id: schema.edits.id, personId: schema.edits.personId, at: schema.edits.at }).from(schema.edits).where(eq(schema.edits.docId, snap.docId)).orderBy(asc(schema.edits.at), asc(schema.edits.id));
+  const last = versions.at(-1);
+  if (versions.length > 1 && last && last.personId === snap.personId && Date.parse(snap.at) - Date.parse(last.at) < EDIT_COALESCE_MS) {
+    await tx.update(schema.edits).set(snap).where(eq(schema.edits.id, last.id));
+    return;
+  }
+  await tx.insert(schema.edits).values(snap);
+  const excess = versions.length + 1 - MAX_VERSIONS;
+  if (excess > 0) await tx.delete(schema.edits).where(inArray(schema.edits.id, versions.slice(1, 1 + excess).map((v) => v.id)));
 }
 
 /** Hands a document to a new owner. A previous owner who is still at the company stays on as collaborator. */

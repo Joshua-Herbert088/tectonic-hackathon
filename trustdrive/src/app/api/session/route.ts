@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { endSession, requireViewer, startSession } from "@/lib/auth";
+import { endSession, requireViewer, sessionId, startSession } from "@/lib/auth";
 import { findPerson } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 
@@ -15,7 +15,7 @@ export const POST = handle(async (req) => {
   const { viewerId } = await readBody(req, z.object({ viewerId: z.string() }));
   const person = await findPerson({ id: viewerId });
   if (!person?.active) throw new HttpError(400, "Unknown or inactive person");
-  await startSession(person.id);
+  await startSession(person.id, await sessionId());
   return Response.json({ viewer: person });
 });
 

@@ -1,4 +1,4 @@
-import { requireViewer } from "@/lib/auth";
+import { requireViewer, sessionId } from "@/lib/auth";
 import { deleteDocumentForever, loadTrash, recordActivity, recordOpen } from "@/lib/db";
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
@@ -31,8 +31,9 @@ export const GET = handle(async (req, ctx: Ctx) => {
 export const PATCH = handle(async (req, ctx: Ctx) => {
   const { id } = await ctx.params;
   const viewer = await requireViewer(req);
-  limitWrites(viewer.id);
-  const { status, body } = await editDocument(viewer, id, await readBody(req, documentPatch));
+  const patch = await readBody(req, documentPatch);
+  limitWrites(viewer.id, await sessionId(), (patch.title?.length ?? 0) + (patch.content?.length ?? 0));
+  const { status, body } = await editDocument(viewer, id, patch);
   return Response.json(body, { status });
 });
 

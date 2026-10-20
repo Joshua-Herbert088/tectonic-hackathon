@@ -9,7 +9,7 @@ import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions, sharedOnly, 
 import type { z } from "zod";
 import { notifyEdit, notifyOverrides } from "./notify";
 import type { documentPatch } from "./schemas";
-import { dismissFaq, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { dismissFaq, storedChars, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
@@ -421,6 +421,29 @@ export function checkTags(db: Db, tags: string[] | undefined, existing: string[]
   if (unknown !== undefined) throw new HttpError(400, `“${unknown}” isn't a tag in the taxonomy. Add it on the Company & tags page first.`);
 }
 
+/** Limits on what's stored, so the drive can't be filled up: documents in all, per owner, and characters of text. */
+export const MAX_DOCUMENTS = 5_000;
+export const MAX_DOCUMENTS_PER_OWNER = 500;
+/** Documents (trash included) and their edit history together. */
+export const MAX_STORED_CHARS = 200_000_000;
+
+// Summing all stored text takes a scan, so it's done at most every 30 s; saves in between are added on.
+let stored: { at: number; chars: number } | null = null;
+
+/** 507 or 409 when adding `chars` characters (and, with `document`, a new document) would go past a limit. */
+export async function checkStorage(db: Db, viewer: Person, adding: { document?: boolean; chars: number }, now = Date.now()) {
+  if (adding.document) {
+    if (db.docs.length >= MAX_DOCUMENTS) throw new HttpError(507, "The drive is full: no more documents can be added until some are removed.");
+    if (db.docs.filter((d) => d.ownerId === viewer.id).length >= MAX_DOCUMENTS_PER_OWNER) throw new HttpError(409, `You own ${MAX_DOCUMENTS_PER_OWNER} documents, the most one person can. Hand some over or remove them first.`);
+  }
+  if (!stored || now - stored.at > 30_000) {
+    const s = await storedChars();
+    stored = { at: now, chars: s.documents + s.history };
+  }
+  if (stored.chars + adding.chars > MAX_STORED_CHARS) throw new HttpError(507, "The drive is out of space for new text. Remove documents you no longer need first.");
+  stored.chars += adding.chars;
+}
+
 /** Owner or collaborator: the people who may change a document's status, tags, scope and confidentiality. */
 export const maintains = (doc: Pick<Doc, "ownerId" | "collaboratorIds">, person: Person) => doc.ownerId === person.id || doc.collaboratorIds.includes(person.id);
 
@@ -496,6 +519,8 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
     gate = g;
   }
 
+  // The new text is stored twice: in the document and as a version in its history.
+  if (contentChanged) await checkStorage(world, viewer, { chars: 2 * (title.length + content.length) });
   if (contentChanged) await notifyEdit(world, doc, title, content, viewer.id);
   await updateDocument(id, viewer.id, patch);
   if (gate?.ok) {
