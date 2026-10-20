@@ -37,8 +37,9 @@ export function TrustBadge({
   }
 
   const band = trustBand(trust.score);
+  const title = `Trust ${trust.score}/100 – ${band.label}${trust.fallback ? (trust.fallback.confidential ? " (estimated from rules: confidential, not sent to Jev)" : " (estimated from rules, Jev unavailable)") : ""}`;
   return (
-    <div className="relative grid place-items-center" style={{ width: size, height: size }} title={`Trust ${trust.score}/100 – ${band.label}`}>
+    <div className="relative grid place-items-center" style={{ width: size, height: size }} title={title}>
       <svg width={size} height={size} className="-rotate-90">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e8eaed" strokeWidth={stroke} />
         <circle
@@ -48,8 +49,8 @@ export function TrustBadge({
           fill="none"
           stroke={band.color}
           strokeWidth={stroke}
-          strokeLinecap="round"
-          strokeDasharray={`${(trust.score / 100) * c} ${c}`}
+          strokeLinecap={trust.fallback ? "butt" : "round"}
+          strokeDasharray={trust.fallback ? dashedArc((trust.score / 100) * c, stroke) : `${(trust.score / 100) * c} ${c}`}
           style={{ transition: "stroke-dasharray 600ms ease" }}
         />
       </svg>
@@ -58,4 +59,12 @@ export function TrustBadge({
       </span>
     </div>
   );
+}
+
+/** A dash pattern that draws an arc of `length` as short dashes – marks a score as an estimate. */
+function dashedArc(length: number, stroke: number) {
+  const dash = stroke * 1.2;
+  const gap = stroke * 0.8;
+  const n = Math.floor(length / (dash + gap));
+  return [...Array.from({ length: n }, () => `${dash} ${gap}`), `0 ${length * 10}`].join(" ");
 }

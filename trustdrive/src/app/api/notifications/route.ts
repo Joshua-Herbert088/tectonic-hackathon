@@ -1,7 +1,5 @@
-import type { NextRequest } from "next/server";
+import { requireViewer } from "@/lib/auth";
 import { listNotifications } from "@/lib/db";
-import { DEFAULT_VIEWER } from "@/lib/service";
+import { handle } from "@/lib/http";
 
-export async function GET(req: NextRequest) {
-  return Response.json(listNotifications(req.nextUrl.searchParams.get("viewer") ?? DEFAULT_VIEWER));
-}
+export const GET = handle(async (req) => Response.json(await listNotifications((await requireViewer(req)).id)));

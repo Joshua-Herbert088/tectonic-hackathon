@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { TrustScore } from "@/lib/types";
 
 type Scored = { id: string; trust: TrustScore | null };
@@ -18,7 +18,7 @@ export function useScores(docs: Scored[] | null, viewerId: string) {
       while (queue.length && !cancelled) {
         const id = queue.shift()!;
         try {
-          const res = await fetch(`/api/docs/${id}/score?viewer=${viewerId}`, { method: "POST" });
+          const res = await fetch(`/api/docs/${id}/score`, { method: "POST" });
           const json = await res.json();
           if (!res.ok) throw new Error(json.error);
           if (!cancelled) setScores((s) => ({ ...s, [`${viewerId}:${id}`]: json.trust }));
@@ -33,8 +33,8 @@ export function useScores(docs: Scored[] | null, viewerId: string) {
     };
   }, [docs, viewerId]);
 
-  return {
-    trustOf: (d: Scored) => d.trust ?? scores[`${viewerId}:${d.id}`] ?? null,
-    failed: (id: string) => !!errors[`${viewerId}:${id}`],
-  };
+  // Stable between renders (until a score arrives), so callers can use them in memo dependencies.
+  const trustOf = useCallback((d: Scored) => d.trust ?? scores[`${viewerId}:${d.id}`] ?? null, [scores, viewerId]);
+  const failed = useCallback((id: string) => !!errors[`${viewerId}:${id}`], [errors, viewerId]);
+  return { trustOf, failed };
 }

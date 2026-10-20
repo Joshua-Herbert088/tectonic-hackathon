@@ -1,4 +1,5 @@
 import { checkConflicts, extractFacts } from "./conflicts";
+import { stripLinks } from "./lexicon";
 import { timeAgo } from "./time";
 import type { Db, Doc, Doubt } from "./types";
 
@@ -15,7 +16,8 @@ function plain(line: string) {
  * edited since; if the line is gone, so is the doubt.
  */
 export function lineDoubts(db: Db, doc: Doc, now = Date.now()): Doubt[] {
-  const lines = doc.content.split("\n");
+  // Link addresses (source citations) aren't text: their ids must not look like years.
+  const lines = stripLinks(doc.content).split("\n");
   const name = (id: string) => db.people.find((p) => p.id === id)?.name ?? "someone";
   const lineOf = (factText: string) => extractFacts(doc.content).find((f) => f.text === factText)?.lineNo;
   const out: Doubt[] = [];
@@ -59,12 +61,13 @@ export function lineDoubts(db: Db, doc: Doc, now = Date.now()): Doubt[] {
   return out;
 }
 
-/** Lines Jev finds contradicting other documents. Slow (Jev calls), so fetched separately from the page. */
+/** Lines Jev (or the conflict rules, without Jev) finds contradicting other documents. Slow (Jev calls), so fetched separately from the page. */
 export async function contradictionDoubts(db: Db, doc: Doc): Promise<Doubt[]> {
-  const check = await checkConflicts(db, { title: doc.title, content: doc.content, location: doc.location, teamId: doc.teamId, docId: doc.id });
+  const check = await checkConflicts(db, { title: doc.title, content: doc.content, locations: doc.locations, teamId: doc.teamId, docId: doc.id, confidential: doc.confidential });
   // Conflicts already overridden against this document are shown by lineDoubts.
   const known = new Set(db.overrides.filter((o) => o.existingDocId === doc.id).map((o) => `${o.docId}|${o.lineText}`));
-  const lines = doc.content.split("\n");
+  // Shown as the reader sees it: source citations without their link addresses.
+  const lines = stripLinks(doc.content).split("\n");
   return [...check.hard, ...check.possible]
     .filter((c) => !known.has(`${c.existing.docId}|${c.existing.lineText}`))
     .map((c) => ({
@@ -73,11 +76,11 @@ export async function contradictionDoubts(db: Db, doc: Doc): Promise<Doubt[]> {
       lineText: plain(lines[c.lineNo - 1] ?? c.lineText),
       tone: c.severity === "hard" ? ("bad" as const) : ("warn" as const),
       kind: "contradiction" as const,
-      text: `${c.severity === "hard" ? "Contradicts" : "May contradict"} “${c.existing.title}” (${Math.round(c.probability * 100)}% sure)`,
+      text: `${c.severity === "hard" ? "Contradicts" : "May contradict"} “${c.existing.title}” (${check.method === "rules" ? "conflict rules" : `${Math.round(c.probability * 100)}% sure`})`,
       source: c.existing,
     }));
 }
 
 function sourceOf(d: Doc) {
-  return { docId: d.id, title: d.title, location: d.location, teamId: d.teamId, status: d.status, updatedAt: d.updatedAt, ownerId: d.ownerId };
+  return { docId: d.id, title: d.title, locations: d.locations, teamId: d.teamId, status: d.status, updatedAt: d.updatedAt, ownerId: d.ownerId };
 }

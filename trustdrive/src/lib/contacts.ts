@@ -16,6 +16,8 @@ import type { Db, Doc, Person } from "./types";
 export interface ContactReason {
   text: string;
   weight: number;
+  /** direct: involvement with this document · topic: related documents · team: team fit */
+  kind: "direct" | "topic" | "team";
 }
 
 export interface Contact {
@@ -52,16 +54,16 @@ function contribution(doc: Doc, history: History) {
   return { share, edits };
 }
 
-export function relevantPeople(db: Db, doc: Doc, viewer: Person, now = Date.now()): { contacts: Contact[]; former: FormerContributor[] } {
+export async function relevantPeople(db: Db, doc: Doc, viewer: Person, now = Date.now()): Promise<{ contacts: Contact[]; former: FormerContributor[] }> {
   const related = relatedScored(db, doc, 6);
-  const history = loadHistory([doc.id, ...related.map((r) => r.d.id)]);
+  const history = await loadHistory([doc.id, ...related.map((r) => r.d.id)]);
   const here = contribution(doc, history);
   const teamName = (id: string) => db.teams.find((t) => t.id === id)?.name ?? id;
 
   const reasons = new Map<string, ContactReason[]>();
-  const add = (personId: string | null | undefined, weight: number, text: string) => {
+  const add = (personId: string | null | undefined, weight: number, text: string, kind: ContactReason["kind"] = "direct") => {
     if (!personId || weight <= 0) return;
-    reasons.set(personId, [...(reasons.get(personId) ?? []), { text, weight }]);
+    reasons.set(personId, [...(reasons.get(personId) ?? []), { text, weight, kind }]);
   };
 
   // 1. Contribution to this document
@@ -108,16 +110,16 @@ export function relevantPeople(db: Db, doc: Doc, viewer: Person, now = Date.now(
   for (const [pid, t] of topical) {
     const shown = t.titles.slice(0, 2).map((x) => `“${x}”`).join(", ");
     const more = t.titles.length > 2 ? ` +${t.titles.length - 2} more` : "";
-    add(pid, Math.min(t.weight, 25), `Knows the topic: worked on ${shown}${more}`);
+    add(pid, Math.min(t.weight, 25), `Knows the topic: worked on ${shown}${more}`, "topic");
   }
 
   // 4. Team relevance (only boosts people who are already involved somehow)
   for (const pid of reasons.keys()) {
     const p = db.people.find((x) => x.id === pid);
     if (!p) continue;
-    if (p.teamId === doc.teamId && p.teamId === viewer.teamId) add(pid, 9, `In your team (${teamName(p.teamId)}), which maintains this document`);
-    else if (p.teamId === doc.teamId) add(pid, 6, `In ${teamName(p.teamId)}, the team that maintains this document`);
-    else if (p.teamId === viewer.teamId) add(pid, 5, `In your team (${teamName(p.teamId)})`);
+    if (p.teamId === doc.teamId && p.teamId === viewer.teamId) add(pid, 9, `In your team (${teamName(p.teamId)}), which maintains this document`, "team");
+    else if (p.teamId === doc.teamId) add(pid, 6, `In ${teamName(p.teamId)}, the team that maintains this document`, "team");
+    else if (p.teamId === viewer.teamId) add(pid, 5, `In your team (${teamName(p.teamId)})`, "team");
   }
 
   const contacts: Contact[] = [];
@@ -127,7 +129,7 @@ export function relevantPeople(db: Db, doc: Doc, viewer: Person, now = Date.now(
     if (!p || pid === viewer.id) continue;
     let score = rs.reduce((n, r) => n + r.weight, 0);
     if (!p.active) {
-      const direct = [...rs].sort((x, y) => y.weight - x.weight).find((r) => !r.text.startsWith("Knows the topic") && !r.text.startsWith("In "));
+      const direct = [...rs].sort((x, y) => y.weight - x.weight).find((r) => r.kind === "direct");
       if (direct && p.leftAt) former.push({ personId: pid, leftAt: p.leftAt, role: direct.text });
       continue;
     }

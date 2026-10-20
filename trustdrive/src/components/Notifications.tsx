@@ -21,11 +21,11 @@ export function NotificationBell() {
 
   const load = useCallback(async () => {
     try {
-      const j = await (await fetch(`/api/notifications?viewer=${viewerId}`)).json();
+      const j = await (await fetch(`/api/notifications`)).json();
       setItems(j.items);
       setUnread(j.unread);
     } catch {}
-  }, [viewerId]);
+  }, []);
 
   useEffect(() => {
     const first = setTimeout(load, 0);
@@ -36,10 +36,11 @@ export function NotificationBell() {
       clearInterval(t);
       window.removeEventListener("focus", load);
     };
-  }, [load]);
+    // Reload when the viewer switches (demo mode).
+  }, [load, viewerId]);
 
   const markRead = async (ids?: number[]) => {
-    await fetch("/api/notifications/read", { method: "POST", body: JSON.stringify({ viewerId, ids }) });
+    await fetch("/api/notifications/read", { method: "POST", body: JSON.stringify({ ids }) });
     load();
   };
 
@@ -56,7 +57,7 @@ export function NotificationBell() {
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <div>
                 <div className="text-sm font-medium text-slate-900">Notifications</div>
-                <div className="text-[11px] text-slate-500">Changes to your documents and to information you wrote</div>
+                <div className="text-[11px] text-slate-500">Messages, and changes to your documents and to information you wrote</div>
               </div>
               {unread > 0 && <button onClick={() => markRead()} className="text-xs text-blue-700 hover:underline">Mark all as read</button>}
             </div>
@@ -69,7 +70,12 @@ export function NotificationBell() {
                     <div className="flex items-start gap-3">
                       <Avatar person={actor} size={28} />
                       <div className="min-w-0 flex-1 text-sm text-slate-700">
-                        {n.kind === "edit" ? (
+                        {n.kind === "message" ? (
+                          <>
+                            <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> wrote in <span className="font-medium text-slate-900">{n.docTitle}</span>
+                            {n.reason && <div className="mt-1 line-clamp-2 rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-700">“{n.reason}”</div>}
+                          </>
+                        ) : n.kind === "edit" ? (
                           <>
                             <span className="font-medium text-slate-900">{actor?.name ?? n.actorId}</span> changed {n.changes.length} line{n.changes.length === 1 ? "" : "s"} you wrote in <span className="font-medium text-slate-900">{n.docTitle}</span>
                           </>
@@ -93,17 +99,17 @@ export function NotificationBell() {
                             </div>
                           ))}
                         </div>
-                        {n.reason && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
+                        {n.reason && n.kind !== "message" && <div className="mt-1.5 text-xs italic text-slate-600">Reason: {n.reason}</div>}
                         <div className="mt-2 flex gap-3 text-xs">
                           <button
                             onClick={() => {
                               markRead([n.id]);
                               setOpen(false);
-                              router.push(`/doc/${n.docId}`);
+                              router.push(n.kind === "message" ? `/conversations?c=${n.docId}` : `/doc/${n.docId}`);
                             }}
                             className="font-medium text-blue-700 hover:underline"
                           >
-                            Open {n.kind === "override" ? "your document" : "document"}
+                            Open {n.kind === "message" ? "conversation" : n.kind === "override" ? "your document" : "document"}
                           </button>
                           {n.otherDocId && (
                             <button

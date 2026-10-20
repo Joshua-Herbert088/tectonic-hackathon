@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { conceptsIn, fold, isConceptWord } from "./lexicon";
+import { conceptsIn, fold, isConceptWord, stripLinks } from "./lexicon";
 import { callJev } from "./trust";
 import { timeAgo } from "./time";
+import { formatLocations, isGlobal, overlaps } from "./appliesTo";
 import type { Conflict, ConflictCheck, Db, Doc, Location } from "./types";
 
 /**
@@ -12,6 +13,7 @@ import type { Conflict, ConflictCheck, Db, Doc, Location } from "./types";
  *    independent: shared words, shared multilingual concepts (salary = loon = salaire = Gehalt), or a
  *    shared name plus the same kind of value in a compatible year.
  * 3. Ask Jev a yes/no question per pair: do these statements directly contradict each other?
+ *    When Jev can't be reached, fixed rules decide instead (`ruleProbability`).
  */
 
 export const HARD_THRESHOLD = 0.75;
@@ -23,15 +25,18 @@ const QUESTIONS_PER_CALL = 20;
 export interface Draft {
   title: string;
   content: string;
-  location: Location;
+  /** The countries it applies to, or ["Global"]. */
+  locations: Location[];
   teamId: string;
   /** When editing, the document being edited (never compared with itself). */
   docId?: string;
   /** When editing, the saved version – only new or changed lines are checked. */
   previousContent?: string;
+  /** Confidential: its lines are never sent to Jev, so the rules decide every pair. */
+  confidential?: boolean;
 }
 
-interface Fact {
+export interface Fact {
   lineNo: number;
   text: string;
   section?: string;
@@ -52,6 +57,15 @@ function normalizeWords(s: string) {
   return fold(s)
     .split(/[^a-z0-9]+/)
     .filter((w) => w.length >= 3 && !STOPWORDS.has(w) && !/^\d+$/.test(w));
+}
+
+/**
+ * Numbers in a text, formatting removed: "3 900", "3.900" and "3,900" all become "3900".
+ * Thin and no-break spaces as thousands separators are common in French.
+ */
+function numbersIn(text: string): string[] {
+  const joined = text.replace(/(\d)[\s\u00a0\u202f](?=\d{3}\b)/g, "$1");
+  return (joined.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/[.,]/g, ""));
 }
 
 function anchorsIn(text: string) {
@@ -78,7 +92,7 @@ export function extractFacts(content: string): Fact[] {
   let header: string[] | null = null;
 
   content.split("\n").forEach((raw, i) => {
-    const line = raw.trim();
+    const line = stripLinks(raw).trim();
     if (!line.startsWith("|")) header = null;
     if (line.startsWith("#")) {
       section = line.replace(/^#+\s*/, "");
@@ -101,10 +115,9 @@ export function extractFacts(content: string): Fact[] {
     const concepts = conceptsIn(text);
     const keywords = new Set([...normalizeWords(text), ...concepts]);
     if (keywords.size < 2) return;
-    // "3 900", "3.900" and "3,900" are the same number; thin/no-break spaces are common in French.
-    const digits = text.replace(/(\d)[\s\u00a0\u202f](?=\d{3}\b)/g, "$1");
-    const numbers = [...(digits.match(/\d+(?:[.,]\d+)*/g) ?? [])].map((n) => n.replace(/[.,]/g, "")).sort().join(",");
-    const years = new Set(digits.match(/\b(?:19|20)\d{2}\b/g) ?? []);
+    const values = numbersIn(text);
+    const numbers = [...values].sort().join(",");
+    const years = new Set(text.match(/\b(?:19|20)\d{2}\b/g) ?? []);
     facts.push({ lineNo: i + 1, text, section, keywords, anchors: anchorsIn(text), years, valueTypes: valueTypesIn(text, concepts), numbers });
   });
   return facts;
@@ -122,7 +135,7 @@ function candidatePairs(db: Db, draft: Draft, facts: Fact[]) {
   const pairs: Pair[] = [];
   for (const doc of docs) {
     const scopeBoost =
-      (doc.location === draft.location ? 0.4 : doc.location === "Global" || draft.location === "Global" ? 0.2 : 0) + (doc.teamId === draft.teamId ? 0.3 : 0);
+      (doc.locations.some((l) => draft.locations.includes(l)) ? 0.4 : overlaps(doc.locations, draft.locations) ? 0.2 : 0) + (doc.teamId === draft.teamId ? 0.3 : 0);
     for (const other of extractFacts(doc.content)) {
       for (const fact of facts) {
         if (fact.numbers === other.numbers) continue; // same values → cannot be a data conflict
@@ -161,8 +174,8 @@ function candidatePairs(db: Db, draft: Draft, facts: Fact[]) {
 
 function question(db: Db, draft: Draft, p: Pair) {
   const team = (id: string) => db.teams.find((t) => t.id === id)?.name ?? id;
-  const a = `New document '${draft.title}' (applies to ${draft.location}, team ${team(draft.teamId)}${p.fact.section ? `, section '${p.fact.section}'` : ""}), line ${p.fact.lineNo}: ${p.fact.text}`;
-  const b = `Existing document '${p.doc.title}' (applies to ${p.doc.location}, team ${team(p.doc.teamId)}, status ${p.doc.status}, edited ${timeAgo(p.doc.updatedAt)}${p.other.section ? `, section '${p.other.section}'` : ""}), line ${p.other.lineNo}: ${p.other.text}`;
+  const a = `New document '${draft.title}' (applies to ${formatLocations(draft.locations)}, team ${team(draft.teamId)}${p.fact.section ? `, section '${p.fact.section}'` : ""}), line ${p.fact.lineNo}: ${p.fact.text}`;
+  const b = `Existing document '${p.doc.title}' (applies to ${formatLocations(p.doc.locations)}, team ${team(p.doc.teamId)}, status ${p.doc.status}, edited ${timeAgo(p.doc.updatedAt)}${p.other.section ? `, section '${p.other.section}'` : ""}), line ${p.other.lineNo}: ${p.other.text}`;
   return {
     type: "noul",
     instructions:
@@ -171,13 +184,138 @@ function question(db: Db, draft: Draft, p: Pair) {
   };
 }
 
+/*
+ * Rule-based verdict, used when Jev is unavailable and as a tested baseline. Deliberately conservative:
+ * it only calls something a hard conflict when both lines are clearly about the same thing (same
+ * person or client, or several shared subject words), in the same country, year and month, and the
+ * values that answer it differ. Wording contradictions are left to Jev.
+ */
+
+/** Concepts that say when or how much, not what – sharing them doesn't make two lines about the same thing. */
+const GENERIC_CONCEPT = /^c:(m\d\d|day|week|month|year|hour|maximum)$/;
+/** Lines that announce a change or a proposal rather than state the current value. */
+const CHANGE_OR_PROPOSAL = /\b(from|as of|vanaf|a partir|ab|depuis|to be confirmed|proposal|proposed|voorstel|projet|entwurf|draft)\b/;
+const CODE = /\b[A-Z]{1,3}\d{1,3}\b/g;
+const HAS_CODE = /\b[A-Z]{1,3}\d{1,3}\b/;
+/** Subjects specific enough that two lines about different ones can't contradict each other. */
+const TOPIC_CONCEPT = /^c:(overtime|mileage|holidaypay|bonus|sick|leave|indexation|car|hotel|perdiem|retention|remote|tax|contribution|declaration)$/;
+const COUNTRY_WORDS = new Set(["belgium", "belgie", "belgique", "belgien", "netherlands", "nederland", "pays-bas", "niederlande", "france", "frankrijk", "frankreich", "germany", "duitsland", "allemagne", "deutschland"]);
+
+/** Multi-word names ("Jonas Maes", "Noordkaai Logistics"): consecutive capitalised words that aren't vocabulary. */
+export function namesIn(text: string) {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/\p{Lu}[\p{L}'-]+(?:\s+(?:(?:de|van|der|el|le|la)\s+)?\p{Lu}[\p{L}'-]+)+/gu)) {
+    // German nouns are capitalised too ("Bruttomonatsgehalt Jonas Maes"): keep the runs of non-vocabulary words.
+    let run: string[] = [];
+    const flush = () => (run.filter((w) => /^\p{Lu}/u.test(w)).length >= 2 && out.add(fold(run.join(" "))), (run = []));
+    for (const w of m[0].split(/\s+/)) {
+      if (/^\p{Lu}/u.test(w) && (isConceptWord(w) || COUNTRY_WORDS.has(fold(w)) || STOPWORDS.has(fold(w)))) flush();
+      else run.push(w);
+    }
+    flush();
+  }
+  return out;
+}
+
+interface Cell {
+  value: string;
+  concepts: Set<string>;
+  stems: Set<string>;
+}
+
+/** Plain words (not covered by a concept), cut to a stem so "expenses" matches "expense". */
+export function stemsOf(text: string) {
+  return new Set(normalizeWords(text).filter((w) => !isConceptWord(w)).map((w) => w.slice(0, 5)));
+}
+
+/** A table row states one fact per column; a plain line is one "subject: value" cell. */
+function cellsOf(f: Fact): Cell[] {
+  return f.text.split("; ").map((part) => {
+    const i = part.lastIndexOf(": ");
+    // The value is usually after the colon, but not in "10 December: deadline for …".
+    const value = i < 0 ? part : valueTokens(part.slice(i + 2)).size || !valueTokens(part.slice(0, i)).size ? part.slice(i + 2) : part.slice(0, i);
+    return { value, concepts: conceptsIn(part), stems: stemsOf(part) };
+  });
+}
+
+/** The values a cell states: codes like P1, and numbers other than years and ordinals ("13th month"), formatting removed. */
+function valueTokens(text: string) {
+  const out = new Set<string>(text.match(CODE) ?? []);
+  const rest = text.replace(CODE, " ").replace(/\b\d+(?:st|nd|rd|th|de|ste)\b/gi, " ");
+  for (const n of numbersIn(rest)) if (!/^(?:19|20)\d\d$/.test(n)) out.add(n);
+  return out;
+}
+
+const overlap = <T,>(a: Set<T>, b: Set<T>) => [...a].filter((x) => b.has(x));
+
+/** Probability-like score (0–1) that draft fact `a` and fact `b` of `doc` directly contradict each other. */
+export function ruleProbability(draft: Pick<Draft, "title" | "locations">, a: Fact, doc: Pick<Doc, "title" | "locations" | "status">, b: Fact): number {
+  return compareFacts(draft, a, doc, b).p;
+}
+
+/**
+ * Rule comparison of two fact lines: `p` as in ruleProbability, and `agrees` when they clearly state
+ * the same fact with the same value (used to tell whether something is already written down).
+ */
+export function compareFacts(draft: Pick<Draft, "title" | "locations">, a: Fact, doc: Pick<Doc, "title" | "locations" | "status">, b: Fact): { p: number; agrees: boolean } {
+  const no = (p: number) => ({ p, agrees: false });
+  // Different countries have different rules; different years or months are different facts.
+  if (!overlaps(draft.locations, doc.locations)) return no(0.05);
+  // Different people or clients, or different topics (sick pay vs holiday pay), are different facts.
+  // Lines without a name or topic of their own borrow the document title's.
+  const na = namesIn(a.text).size ? namesIn(a.text) : namesIn(draft.title);
+  const nb = namesIn(b.text).size ? namesIn(b.text) : namesIn(doc.title);
+  if (na.size && nb.size && !overlap(na, nb).length) return no(0.1);
+  const topics = (f: Fact, title: string) => new Set([...f.keywords, ...conceptsIn(title)].filter((k) => TOPIC_CONCEPT.test(k)));
+  const topicsA = topics(a, draft.title);
+  const topicsB = topics(b, doc.title);
+  if (topicsA.size && topicsB.size && !overlap(topicsA, topicsB).length) return no(0.1);
+  if (a.years.size && b.years.size && !overlap(a.years, b.years).length) return no(0.05);
+  const months = (f: Fact) => new Set([...f.keywords].filter((k) => /^c:m\d\d$/.test(k)));
+  if (months(a).size && months(b).size && !overlap(months(a), months(b)).length) return no(0.05);
+
+  // Compare the cells that are about the same thing (shared concepts count double), among cells that state a value.
+  let best: { shared: number; ca: Cell; cb: Cell } | null = null;
+  for (const ca of cellsOf(a).filter((c) => valueTokens(c.value).size)) {
+    for (const cb of cellsOf(b).filter((c) => valueTokens(c.value).size)) {
+      const concepts = overlap(ca.concepts, cb.concepts).filter((c) => !GENERIC_CONCEPT.test(c)).length;
+      const shared = concepts * 2 + overlap(ca.stems, cb.stems).length;
+      if (!best || shared > best.shared) best = { shared, ca, cb };
+    }
+  }
+  if (!best || !best.shared) return no(0.1);
+  const va = valueTokens(best.ca.value);
+  const vb = valueTokens(best.cb.value);
+  if (!va.size || !vb.size) return no(0.1); // nothing to compare
+  if (overlap(va, vb).length) return { p: 0.1, agrees: best.shared >= 3 || (best.shared >= 2 && overlap(na, nb).length > 0) };
+  const ta = valueTypesIn(best.ca.value, best.ca.concepts);
+  const tb = valueTypesIn(best.cb.value, best.cb.concepts);
+  if ((ta.size || tb.size) && !overlap(ta, tb).length && !(HAS_CODE.test(best.ca.value) && HAS_CODE.test(best.cb.value))) return no(0.15);
+
+  const sameName = overlap(na, nb).length > 0;
+  // Subject words of each whole line: specific concepts plus plain-word stems.
+  const subjectOf = (f: Fact) => new Set([...[...f.keywords].filter((k) => k.startsWith("c:") && !GENERIC_CONCEPT.test(k)), ...stemsOf(f.text)]);
+  const sa = subjectOf(a);
+  const sb = subjectOf(b);
+  const subject = overlap(sa, sb).length;
+  // Short lines ("Mileage allowance: €0.40/km") can't share many words, so also accept near-complete overlap.
+  const coverage = subject / Math.max(1, Math.min(sa.size, sb.size));
+
+  const p = sameName ? 0.9 : best.shared >= 4 && (subject >= 3 || coverage >= 0.8) ? 0.85 : best.shared >= 3 ? 0.55 : 0.3;
+  // One side is about a specific topic the other doesn't mention: probably not the same fact.
+  if (!topicsA.size !== !topicsB.size) return no(Math.min(p, 0.3));
+  // Not a clear contradiction: a draft or proposal, a change from a date, or a country rule next to a global one.
+  const hedged = doc.status === "WIP" || CHANGE_OR_PROPOSAL.test(fold(a.text)) || CHANGE_OR_PROPOSAL.test(fold(b.text)) || isGlobal(draft.locations) !== isGlobal(doc.locations);
+  return no(hedged ? Math.min(p, 0.55) : p);
+}
+
 // Save requests re-run the check; caching keeps that instant and consistent with what the user saw.
 const cache = new Map<string, ConflictCheck>();
 
-export async function checkConflicts(db: Db, draft: Draft): Promise<ConflictCheck> {
-  const docsVersion = db.docs.map((d) => `${d.id}@${d.updatedAt}@${d.location}@${d.status}`).join("|");
+export async function checkConflicts(db: Db, draft: Draft, opts: { rulesOnly?: boolean } = {}): Promise<ConflictCheck> {
+  const docsVersion = db.docs.map((d) => `${d.id}@${d.updatedAt}@${d.locations}@${d.status}${d.confidential ? "@c" : ""}`).join("|");
   const key = crypto.createHash("sha1").update(JSON.stringify([draft, docsVersion])).digest("hex");
-  const hit = cache.get(key);
+  const hit = !opts.rulesOnly && cache.get(key);
   if (hit) return hit;
 
   const unchanged = new Set(draft.previousContent ? extractFacts(draft.previousContent).map((f) => f.text) : []);
@@ -186,17 +324,28 @@ export async function checkConflicts(db: Db, draft: Draft): Promise<ConflictChec
   const overridden = new Set(db.overrides.filter((o) => o.docId === draft.docId).map((o) => `${o.lineText}|${o.existingDocId}|${o.existingLineText}`));
   const { pairs: all, docsChecked } = candidatePairs(db, draft, facts);
   const pairs = all.filter((p) => !overridden.has(`${p.fact.text}|${p.doc.id}|${p.other.text}`));
+  // Pairs with a confidential side are never sent to Jev; the rules decide those.
+  const shareable = pairs.filter((p) => !draft.confidential && !p.doc.confidential);
   const chunks: Pair[][] = [];
-  for (let i = 0; i < pairs.length; i += QUESTIONS_PER_CALL) chunks.push(pairs.slice(i, i + QUESTIONS_PER_CALL));
-  const answers = await Promise.all(
-    chunks.map((chunk) =>
-      callJev({
-        state: { task: "Detect hard factual conflicts between a new or edited document and existing company documents", today: new Date().toISOString().slice(0, 10) },
-        questions: Object.fromEntries(chunk.map((p, j) => [`c${j}`, question(db, draft, p)])),
-      }).then((r) => chunk.map((_, j) => r.answers[`c${j}`].noul)),
-    ),
-  );
-  const flat = answers.flat();
+  for (let i = 0; i < shareable.length; i += QUESTIONS_PER_CALL) chunks.push(shareable.slice(i, i + QUESTIONS_PER_CALL));
+  let method: ConflictCheck["method"] = shareable.length ? "jev" : "rules";
+  const fromJev = new Map<Pair, number>();
+  try {
+    if (opts.rulesOnly) throw new Error("rules requested");
+    const answers = await Promise.all(
+      chunks.map((chunk) =>
+        callJev({
+          state: { task: "Detect hard factual conflicts between a new or edited document and existing company documents", today: new Date().toISOString().slice(0, 10) },
+          questions: Object.fromEntries(chunk.map((p, j) => [`c${j}`, question(db, draft, p)])),
+        }).then((r) => chunk.map((_, j) => r.answers[`c${j}`].noul)),
+      ),
+    );
+    answers.flat().forEach((prob, i) => fromJev.set(shareable[i], prob));
+  } catch {
+    method = "rules";
+    fromJev.clear();
+  }
+  const flat = pairs.map((p) => fromJev.get(p) ?? ruleProbability(draft, p.fact, p.doc, p.other));
 
   const conflicts: Conflict[] = pairs
     .map((p, i) => ({ p, prob: flat[i] }))
@@ -212,7 +361,7 @@ export async function checkConflicts(db: Db, draft: Draft): Promise<ConflictChec
         title: p.doc.title,
         lineNo: p.other.lineNo,
         lineText: p.other.text,
-        location: p.doc.location,
+        locations: p.doc.locations,
         teamId: p.doc.teamId,
         status: p.doc.status,
         updatedAt: p.doc.updatedAt,
@@ -226,19 +375,20 @@ export async function checkConflicts(db: Db, draft: Draft): Promise<ConflictChec
     possible: conflicts.filter((c) => c.severity === "possible"),
     pairsChecked: pairs.length,
     docsChecked,
+    method,
   };
-  if (cache.size > 200) cache.clear();
-  cache.set(key, result);
+  // Rule results aren't cached, so Jev decides again as soon as it's back.
+  if (method === "jev") {
+    if (cache.size > 200) cache.clear();
+    cache.set(key, result);
+  }
   return result;
 }
 
 /** Language-independent bag of features for a whole text: words, concepts, names and numbers. */
-export function textFeatures(text: string): Set<string> {
+export function textFeatures(raw: string): Set<string> {
+  const text = stripLinks(raw);
   const out = new Set<string>([...normalizeWords(text), ...conceptsIn(text), ...anchorsIn(text)]);
-  const digits = text.replace(/(\d)[\s  ](?=\d{3}\b)/g, "$1");
-  for (const n of digits.match(/\d+(?:[.,]\d+)*/g) ?? []) {
-    const v = n.replace(/[.,]/g, "");
-    if (v.length >= 2) out.add(`n:${v}`);
-  }
+  for (const n of numbersIn(text)) if (n.length >= 2) out.add(`n:${n}`);
   return out;
 }

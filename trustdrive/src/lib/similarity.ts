@@ -7,6 +7,7 @@ import type { Db, Doc, DocStatus, Location } from "./types";
  * Redundancy detection: does a document contain basically the same information as another one?
  * A cheap feature overlap (words, multilingual concepts, names, numbers) picks a few candidates,
  * then Jev scores how much information they share – across languages and wording.
+ * When Jev can't be reached, `ruleOverlap` estimates it from shared numbers, concepts and names.
  */
 
 export const OVERLAP_LEVELS = [
@@ -26,25 +27,45 @@ const MAX_CHARS = 3000;
 export interface SimilarDoc {
   docId: string;
   title: string;
-  location: Location;
+  locations: Location[];
   status: DocStatus;
   teamId: string;
   ownerId: string | null;
   updatedAt: string;
-  /** Jev's position on OVERLAP_LEVELS (0–4). */
+  /** Position on OVERLAP_LEVELS (0–4), from Jev or estimated by rules. */
   overlap: number;
   label: string;
+  method: "jev" | "rules";
 }
 
 interface Text {
   title: string;
   content: string;
+  /** Never sent to Jev: compared by the rules only. */
+  confidential?: boolean;
 }
 
 function prefilter(a: Set<string>, b: Set<string>) {
   let shared = 0;
   for (const f of a) if (b.has(f)) shared++;
   return shared / Math.max(1, Math.min(a.size, b.size));
+}
+
+const jaccard = (a: Set<string>, b: Set<string>) => [...a].filter((x) => b.has(x)).length / Math.max(1, new Set([...a, ...b]).size);
+/** Numbers, concepts and names read the same in every language, so a translation shares them. */
+const languageFree = (features: Set<string>) => new Set([...features].filter((f) => f.startsWith("n:") || f.startsWith("c:")));
+const MIN_LANGUAGE_FREE = 5;
+
+/**
+ * Estimated position on OVERLAP_LEVELS without Jev: how many numbers and concepts the texts share
+ * (catches translations), or how many features overall (catches copies with few numbers).
+ * Calibrated on the demo company: duplicates and translations land at 2.8–4, related documents below 2.7.
+ */
+export function ruleOverlap(a: Set<string>, b: Set<string>) {
+  const la = languageFree(a);
+  const lb = languageFree(b);
+  const byFacts = Math.min(la.size, lb.size) >= MIN_LANGUAGE_FREE ? jaccard(la, lb) * 4.5 : 0;
+  return Math.min(4, Math.max(byFacts, jaccard(a, b) * 5.5));
 }
 
 const cache = new Map<string, number>();
@@ -89,22 +110,42 @@ export async function findSameInformation(text: Text, pool: Doc[]): Promise<Simi
     .sort((a, b) => b.s - a.s)
     .slice(0, MAX_CANDIDATES)
     .map((x) => x.d);
+  // Without Jev, estimate over the whole pool: the word-based prefilter ranks translations too low.
+  const byRules = () =>
+    pool
+      .map((d) => similar(d, ruleOverlap(features, textFeatures(`${d.title}\n${d.content}`)), "rules"))
+      .filter((x) => x.overlap >= SAME_INFO_THRESHOLD)
+      .sort((a, b) => b.overlap - a.overlap)
+      .slice(0, MAX_CANDIDATES);
+  // A confidential text is never sent to Jev, and neither is a confidential candidate.
+  if (text.confidential) return byRules();
   if (!candidates.length) return [];
-  const scores = await jevOverlap(text, candidates);
+  const shareable = candidates.filter((d) => !d.confidential);
+  let scores: number[];
+  try {
+    scores = shareable.length ? await jevOverlap(text, shareable) : [];
+  } catch {
+    return byRules();
+  }
   return candidates
-    .map((d, i) => ({
-      docId: d.id,
-      title: d.title,
-      location: d.location,
-      status: d.status,
-      teamId: d.teamId,
-      ownerId: d.ownerId,
-      updatedAt: d.updatedAt,
-      overlap: scores[i],
-      label: OVERLAP_LEVELS[Math.round(scores[i])].split(" – ")[0],
-    }))
+    .map((d) => (d.confidential ? similar(d, ruleOverlap(features, textFeatures(`${d.title}\n${d.content}`)), "rules") : similar(d, scores[shareable.indexOf(d)], "jev")))
     .filter((x) => x.overlap >= SAME_INFO_THRESHOLD)
     .sort((a, b) => b.overlap - a.overlap);
+}
+
+function similar(d: Doc, overlap: number, method: SimilarDoc["method"]): SimilarDoc {
+  return {
+    docId: d.id,
+    title: d.title,
+    locations: d.locations,
+    status: d.status,
+    teamId: d.teamId,
+    ownerId: d.ownerId,
+    updatedAt: d.updatedAt,
+    overlap,
+    label: OVERLAP_LEVELS[Math.round(overlap)].split(" – ")[0],
+    method,
+  };
 }
 
 /** For uploads: existing documents (not superseded) that the new one would duplicate. */
@@ -115,11 +156,5 @@ export function findRedundant(db: Db, text: Text, excludeDocId?: string) {
   );
 }
 
-/** Text with headings and blank lines removed – used to tell an empty new doc from a real one. */
-export function substance(content: string) {
-  return content
-    .split("\n")
-    .filter((l) => l.trim() && !l.trim().startsWith("#"))
-    .join("\n")
-    .trim();
-}
+// Lives in lexicon.ts so the browser can use it too (this module needs Node's crypto).
+export { substance } from "./lexicon";

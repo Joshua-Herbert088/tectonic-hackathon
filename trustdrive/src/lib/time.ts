@@ -20,7 +20,3 @@ export function timeAgo(iso: string, now = Date.now()) {
 function plural(n: number, unit: string) {
   return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 }
-
-export function shortDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-}

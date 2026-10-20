@@ -1,6 +1,9 @@
+import { requireViewer } from "@/lib/auth";
 import { loadWorld } from "@/lib/db";
+import { handle } from "@/lib/http";
 
-export async function GET() {
-  const { teams, people } = loadWorld();
-  return Response.json({ teams, people });
-}
+export const GET = handle(async (req) => {
+  await requireViewer(req);
+  const { teams, people, clients, terms } = await loadWorld();
+  return Response.json({ teams, people, clients, terms });
+});

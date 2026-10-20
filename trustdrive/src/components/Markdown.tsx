@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Fragment } from "react";
 
 /** A highlighted line: doubts a reader should know about, keyed by 1-based line number. */
@@ -116,8 +117,32 @@ export function Markdown({
   return <div className="text-[15px] text-slate-700 [overflow-wrap:anywhere]">{blocks}</div>;
 }
 
-function inline(s: string) {
+const LINK = /\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+
+function bold(s: string, key: string) {
   return s.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-    part.startsWith("**") ? <strong key={i} className="font-semibold text-slate-900">{part.slice(2, -2)}</strong> : <Fragment key={i}>{part}</Fragment>,
+    part.startsWith("**") ? <strong key={`${key}-${i}`} className="font-semibold text-slate-900">{part.slice(2, -2)}</strong> : <Fragment key={`${key}-${i}`}>{part}</Fragment>,
   );
+}
+
+/**
+ * Bold and links. Links stay inside the app (`/…`) or open https pages in a new tab; anything else
+ * (javascript:, data:) is shown as text. The optional title shows on hover – sources use it for the quote.
+ */
+function inline(s: string) {
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  for (const m of s.matchAll(LINK)) {
+    out.push(...bold(s.slice(last, m.index), `t${last}`));
+    const [, text, href, title] = m;
+    const style = "text-[#0b57d0] underline decoration-[#0b57d0]/30 underline-offset-2 hover:decoration-[#0b57d0]";
+    if (href.startsWith("/") && !href.startsWith("//")) {
+      out.push(<Link key={`l${m.index}`} href={href} title={title} className={style}>{text}</Link>);
+    } else if (href.startsWith("https://")) {
+      out.push(<a key={`l${m.index}`} href={href} title={title} target="_blank" rel="noopener noreferrer" className={style}>{text}</a>);
+    } else out.push(<Fragment key={`l${m.index}`}>{text}</Fragment>);
+    last = m.index + m[0].length;
+  }
+  out.push(...bold(s.slice(last), `t${last}`));
+  return out;
 }

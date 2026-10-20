@@ -1,3 +1,4 @@
+import { isGlobal } from "./appliesTo";
 import { daysSince, timeAgo } from "./time";
 import type { Doc, Handover, Person, Signal, Team } from "./types";
 
@@ -59,7 +60,7 @@ function suggestSuccessors(doc: DocMeta, people: Person[], teamName: (id: string
         score += 2;
         why.push(teamName(p.teamId));
       }
-      if (doc.location !== "Global" && p.location === doc.location) score += 1;
+      if (!isGlobal(doc.locations) && doc.locations.includes(p.location)) score += 1;
       const reads = doc.views.filter((v) => v.personId === p.id && daysSince(v.at, now) <= 30).length;
       if (reads) {
         score += 1;

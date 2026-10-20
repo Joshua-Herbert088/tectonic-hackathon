@@ -1,26 +1,82 @@
 {
   "version": "7",
-  "dialect": "sqlite",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "6",
-      "when": 1790791721913,
+      "version": "7",
+      "when": 1792324336135,
       "tag": "0000_init",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "6",
-      "when": 1790792737974,
-      "tag": "0001_conflict_overrides",
+      "version": "7",
+      "when": 1792325231747,
+      "tag": "0001_messaging",
       "breakpoints": true
     },
     {
       "idx": 2,
-      "version": "6",
-      "when": 1790794890948,
-      "tag": "0002_notifications",
+      "version": "7",
+      "when": 1792325304614,
+      "tag": "0002_external_actors",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792325814754,
+      "tag": "0003_remove_simulated_replies",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792334626627,
+      "tag": "0004_folders",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792336863459,
+      "tag": "0005_taxonomy",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792340000000,
+      "tag": "0006_confidential",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792340000001,
+      "tag": "0007_applies_to",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792340000002,
+      "tag": "0008_drop_single_location",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792340000003,
+      "tag": "0009_document_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792341939353,
+      "tag": "0010_trash_and_my_clients",
       "breakpoints": true
     }
   ]

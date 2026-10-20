@@ -66,7 +66,7 @@ for (const [concept, stems] of Object.entries(CONCEPTS)) {
 const PHRASES = Object.entries(CONCEPTS).flatMap(([concept, stems]) => stems.filter((s) => s.includes(" ")).map((s) => [s, concept] as const));
 
 export function fold(s: string) {
-  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 /** Concept ids (prefixed "c:") present in a piece of text, whatever its language. */
@@ -87,4 +87,21 @@ export function conceptsIn(text: string): Set<string> {
 export function isConceptWord(word: string) {
   const w = fold(word);
   return EXACT.has(w) || PARTIAL.some(([stem]) => w.length >= 4 && w.includes(stem));
+}
+
+/**
+ * Markdown links reduced to their text. Documents cite sources with links whose addresses contain ids
+ * and numbers; those must never be read as facts, years or keywords.
+ */
+export function stripLinks(text: string) {
+  return text.replace(/\[([^\]]+)\]\([^)\s]+(?:\s+"[^"]*")?\)/g, "$1");
+}
+
+/** Text with headings and blank lines removed – used to tell an empty new doc from a real one. */
+export function substance(content: string) {
+  return content
+    .split("\n")
+    .filter((l) => l.trim() && !l.trim().startsWith("#"))
+    .join("\n")
+    .trim();
 }

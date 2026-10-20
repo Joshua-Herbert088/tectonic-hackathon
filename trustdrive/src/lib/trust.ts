@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 import type { Db, Doc, Person, Signal, TrustScore } from "./types";
+import { coversCountry, formatLocations, isGlobal } from "./appliesTo";
+import { config } from "./config";
+import { stripLinks } from "./lexicon";
 import { daysSince, timeAgo } from "./time";
 
 /** Ordered low → high. Jev returns a fractional position on this scale, which we map to 0–100. */
@@ -69,6 +72,9 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
   const superseding = doc.supersededById ? db.docs.find((d) => d.id === doc.supersededById) : undefined;
   const overridesMade = db.overrides.filter((o) => o.docId === doc.id);
   const overridesAgainst = db.overrides.filter((o) => o.existingDocId === doc.id);
+  // Lines and excerpts of confidential documents never go to Jev, even as context for another document.
+  const secret = (docId: string) => !!db.docs.find((d) => d.id === docId)?.confidential;
+  const HIDDEN = "(confidential – not shared)";
 
   return {
     today: new Date(now).toISOString().slice(0, 10),
@@ -80,8 +86,8 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       title: doc.title,
       type: doc.kind,
       status: doc.status,
-      appliesToLocation: doc.location,
-      organisationTeam: team,
+      appliesTo: { countries: doc.locations, teams: doc.audienceTeamIds.length ? doc.audienceTeamIds.map((id) => db.teams.find((t) => t.id === id)?.name ?? id) : "all teams there" },
+      maintainedByTeam: team,
       tags: doc.tags,
       createdDaysAgo: daysSince(doc.createdAt, now),
       lastEditedDaysAgo: daysSince(doc.updatedAt, now),
@@ -100,7 +106,7 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
         ? overridesMade.map((o) => ({
             conflictsWith: o.existingTitle,
             thisLine: o.lineText,
-            theirLine: o.existingLineText,
+            theirLine: secret(o.existingDocId) ? HIDDEN : o.existingLineText,
             overriddenBy: personSummary(db, o.personId, now),
             daysAgo: daysSince(o.at, now),
             reason: o.reason,
@@ -110,12 +116,12 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
         ? overridesAgainst.map((o) => ({
             document: db.docs.find((d) => d.id === o.docId)?.title,
             thisLine: o.existingLineText,
-            theirLine: o.lineText,
+            theirLine: secret(o.docId) ? HIDDEN : o.lineText,
             overriddenBy: personSummary(db, o.personId, now),
             daysAgo: daysSince(o.at, now),
           }))
         : undefined,
-      content: doc.content.slice(0, MAX_CONTENT_CHARS),
+      content: stripLinks(doc.content).slice(0, MAX_CONTENT_CHARS),
     },
     relatedDocuments: relatedDocs(db, doc).map((r) => {
       const v = [...r.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
@@ -123,12 +129,12 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       return {
         title: r.title,
         status: r.status,
-        appliesToLocation: r.location,
+        appliesTo: r.locations,
         lastEditedDaysAgo: daysSince(r.updatedAt, now),
         lastVerifiedDaysAgo: v ? daysSince(v.at, now) : "never",
         ownerStillAtCompany: owner ? owner.active : "no owner",
         supersedesThisDocument: doc.supersededById === r.id,
-        excerpt: r.content.slice(0, MAX_RELATED_EXCERPT),
+        excerpt: r.confidential ? HIDDEN : r.content.slice(0, MAX_RELATED_EXCERPT),
       };
     }),
   };
@@ -142,7 +148,6 @@ export function hashState(state: JevState) {
   return crypto.createHash("sha1").update(JSON.stringify(rest)).digest("hex").slice(0, 16);
 }
 
-/** POSTs a decide request to Jev, retrying on rate limits / overload. */
 interface JevAnswer {
   type: "score" | "noul" | "choice";
   score: number;
@@ -151,22 +156,55 @@ interface JevAnswer {
   probabilities: Record<string, number>;
 }
 
+const JEV_TIMEOUT_MS = 20_000;
+/** After Jev is unreachable or overloaded, fail fast for this long instead of waiting on every request. */
+const JEV_COOLDOWN_MS = 30_000;
+let jevDownUntil = 0;
+// The last outcome of a Jev call, so the UI can say once that it's showing estimates.
+let lastJev: { ok: boolean; at: number; reason?: string } | null = null;
+
+/** Whether Jev answered the last time it was asked (unknown until the first call). */
+export function jevStatus() {
+  if (config.jev.disabled) return { available: false, reason: "turned off (JEV_DISABLED=1)" };
+  return lastJev ? { available: lastJev.ok, reason: lastJev.reason } : { available: true };
+}
+
+/** POSTs a decide request to Jev, retrying on rate limits / overload. */
 export async function callJev(body: object): Promise<{ model: string; answers: Record<string, JevAnswer> }> {
-  const key = process.env.JEV_API_KEY;
+  // JEV_DISABLED=1 runs everything on the rule-based fallbacks (offline demos, tests).
+  if (config.jev.disabled) throw new Error("Jev is turned off (JEV_DISABLED=1)");
+  const key = config.jev.apiKey;
   if (!key) throw new Error("JEV_API_KEY is not set");
-  const url = process.env.JEV_API_URL ?? "https://jevtypesafeai.com/api/v1/decide";
+  if (Date.now() < jevDownUntil) throw new Error("Jev is unavailable, trying again shortly");
+  const url = config.jev.url;
 
   let lastError = "";
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "jev-latest", ...body }),
-    });
-    if (res.ok) return res.json();
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "jev-latest", ...body }),
+        signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
+      });
+    } catch (e) {
+      // Network error or timeout.
+      jevDownUntil = Date.now() + JEV_COOLDOWN_MS;
+      lastJev = { ok: false, at: Date.now(), reason: "can't be reached from this network" };
+      throw new Error(`Jev is unreachable: ${(e as Error).message}`);
+    }
+    if (res.ok) {
+      lastJev = { ok: true, at: Date.now() };
+      return res.json();
+    }
     lastError = `${res.status} ${await res.text()}`;
     if (![429, 502, 529].includes(res.status)) break;
     await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+  }
+  if (/^(429|5\d\d) /.test(lastError)) {
+    jevDownUntil = Date.now() + JEV_COOLDOWN_MS;
+    lastJev = { ok: false, at: Date.now(), reason: lastError.startsWith("429") ? "is rate-limiting requests" : "is having problems" };
   }
   throw new Error(`Jev request failed: ${lastError}`);
 }
@@ -195,12 +233,47 @@ export async function scoreWithJev(state: JevState): Promise<Omit<TrustScore, "i
   };
 }
 
+/**
+ * Used when Jev can't be reached: picks a level on the same rubric (TRUST_LEVELS) with fixed rules
+ * over the metadata, so the drive keeps working. Coarser than Jev – it doesn't read the content
+ * beyond outdated years – and it's never stored, so Jev is asked again next time.
+ */
+export function fallbackScore(db: Db, doc: Doc, viewer: Person, reason: string, now = Date.now(), opts: { confidential?: boolean } = {}): Omit<TrustScore, "inputHash"> {
+  const started = Date.now();
+  const owner = db.people.find((p) => p.id === doc.ownerId);
+  const lastVerified = Math.min(...doc.verifications.map((v) => daysSince(v.at, now)), Infinity);
+  const freshest = Math.min(lastVerified, daysSince(doc.updatedAt, now));
+  const otherCountry = !coversCountry(doc.locations, viewer.location);
+  const year = new Date(now).getFullYear();
+  const outdatedYears = (doc.content.match(/\b20[12]\d\b/g) ?? []).map(Number).some((y) => y < year - 1);
+  const overridden = db.overrides.some((o) => o.docId === doc.id || o.existingDocId === doc.id);
+
+  let level: number;
+  if (!owner?.active || doc.supersededById || freshest > 730) level = 0;
+  else if (freshest > 365 || outdatedYears) level = 1;
+  else if (doc.status !== "Completed" || otherCountry || overridden) level = 2;
+  else if (lastVerified > 90) level = 3;
+  else if (lastVerified > 30 || viewer.teamId !== doc.teamId) level = 4;
+  else level = 5;
+
+  return {
+    score: Math.round((level / (TRUST_LEVELS.length - 1)) * 100),
+    confidence: 0.5,
+    levelProbabilities: Object.fromEntries(TRUST_LEVELS.map((_, i) => [String(i), i === level ? 1 : 0])),
+    model: opts.confidential ? "rules (confidential, not sent to Jev)" : "rules (Jev unavailable)",
+    computedAt: new Date().toISOString(),
+    latencyMs: Date.now() - started,
+    fallback: opts.confidential ? { reason, confidential: true } : { reason },
+  };
+}
+
 /** Human-readable good/bad facts, derived directly from metadata (independent of Jev's score). */
 export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now()): Signal[] {
   const out: Signal[] = [];
   const person = (id: string | null | undefined) => db.people.find((p) => p.id === id);
   const teamName = (id?: string) => db.teams.find((t) => t.id === id)?.name ?? "another team";
   const owner = person(doc.ownerId);
+  const related = relatedDocs(db, doc);
 
   // Ownership
   if (!owner) out.push({ tone: "bad", text: "No owner – nobody is accountable for keeping this document correct" });
@@ -237,23 +310,29 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
   else if (doc.status === "WIP") out.push({ tone: "warn", text: "Still a work in progress" });
   else out.push({ tone: "warn", text: "Flagged as needing review" });
 
-  // Location
-  if (doc.location === "Global") out.push({ tone: "neutral", text: "Applies to all countries" });
-  else if (doc.location === viewer.location || viewer.location === "Global")
-    out.push({ tone: "good", text: `Applies to ${doc.location}${viewer.location === doc.location ? " – your location" : ""}` });
-  else out.push({ tone: "bad", text: `Applies to ${doc.location}, but you are in ${viewer.location}` });
+  // Who it applies to: countries, then teams within them
+  const where = formatLocations(doc.locations);
+  if (isGlobal(doc.locations)) out.push({ tone: "neutral", text: "Applies to all countries" });
+  else if (coversCountry(doc.locations, viewer.location))
+    out.push({ tone: "good", text: `Applies to ${where}${doc.locations.includes(viewer.location) ? " – including your location" : ""}` });
+  else out.push({ tone: "bad", text: `Applies to ${where}, but you are in ${viewer.location}` });
+  if (doc.audienceTeamIds.length) {
+    const names = doc.audienceTeamIds.map((id) => db.teams.find((t) => t.id === id)?.name ?? id).join(", ");
+    if (doc.audienceTeamIds.includes(viewer.teamId)) out.push({ tone: "good", text: `Meant for your team (${names})` });
+    else out.push({ tone: "warn", text: `Meant for ${names}, not your team` });
+  }
 
   // Superseded / newer related
   if (doc.supersededById) {
     const s = db.docs.find((d) => d.id === doc.supersededById);
     if (s) out.push({ tone: "bad", text: `Superseded by “${s.title}” (edited ${timeAgo(s.updatedAt, now)})` });
   } else {
-    const newer = relatedDocs(db, doc).find(
+    const newer = related.find(
       (r) => r.status !== "WIP" && new Date(r.updatedAt) > new Date(doc.updatedAt) && daysSince(doc.updatedAt, now) > 180 && r.tags.some((t) => doc.tags.includes(t) && t !== "policy"),
     );
     if (newer) out.push({ tone: "warn", text: `A related document is more recent: “${newer.title}”` });
   }
-  const draft = db.docs.find((d) => d.id !== doc.id && d.status === "WIP" && relatedDocs(db, doc, 3).includes(d) && d.tags.filter((t) => doc.tags.includes(t)).length >= 2);
+  const draft = related.slice(0, 3).find((d) => d.status === "WIP" && d.tags.filter((t) => doc.tags.includes(t)).length >= 2);
   if (draft && doc.status === "Completed") out.push({ tone: "warn", text: `A new version is being drafted: “${draft.title}”` });
 
   // Conflicts someone chose to override
@@ -267,7 +346,7 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
 
   // Old years mentioned as current
   const year = new Date(now).getFullYear();
-  const years = [...new Set(doc.content.match(/\b20[12]\d\b/g) ?? [])].map(Number).filter((y) => y < year - 1);
+  const years = [...new Set(stripLinks(doc.content).match(/\b20[12]\d\b/g) ?? [])].map(Number).filter((y) => y < year - 1);
   if (years.length) out.push({ tone: "warn", text: `Content refers to ${years.sort().join(", ")}` });
 
   // Collaborators

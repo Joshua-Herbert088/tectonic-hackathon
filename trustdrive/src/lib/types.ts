@@ -1,5 +1,7 @@
-export type Location = "Belgium" | "Netherlands" | "France" | "Germany" | "Global";
-export const LOCATIONS: Location[] = ["Belgium", "Netherlands", "France", "Germany", "Global"];
+import type { Term } from "./taxonomy";
+
+/** A country's name, or "Global". Countries are part of the editable taxonomy (see taxonomy.ts). */
+export type Location = string;
 
 export type DocStatus = "WIP" | "To be reviewed" | "Completed";
 export const STATUSES: DocStatus[] = ["WIP", "To be reviewed", "Completed"];
@@ -18,10 +20,50 @@ export interface Person {
   active: boolean;
   joinedAt: string;
   leftAt?: string;
+  /** The clients they chose to see; unset = their team's clients. */
+  clientIds?: string[];
   /** Set when the person moved to a different team; teamId is the current one. */
   previousTeamId?: string;
   movedTeamAt?: string;
   color: string;
+  email?: string;
+  phone?: string;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  domain?: string;
+  teamId: string;
+  location: Location;
+}
+
+export interface Message {
+  id: number;
+  personId?: string;
+  authorName: string;
+  authorEmail?: string;
+  sentAt: string;
+  body: string;
+}
+
+/** Someone on a conversation: a colleague (personId) or a client contact. */
+export interface Participant {
+  personId?: string;
+  name: string;
+  email?: string;
+}
+
+/** An email thread or Teams chat. */
+export interface Conversation {
+  id: string;
+  source: "email" | "teams";
+  title: string;
+  clientId?: string;
+  importedById?: string;
+  createdAt: string;
+  participants: Participant[];
+  messages: Message[];
 }
 
 export interface Verification {
@@ -56,6 +98,12 @@ export interface VersionEvent {
   personId: string | null;
   summary: string;
   contentPreview: string;
+  /** Lines removed and added compared with the previous version, in document order (capped). */
+  changes: { kind: "added" | "removed"; text: string }[];
+  /** Total number of changed lines, including any left out of `changes`. */
+  changeCount: number;
+  /** Title, status, location or team changes compared with the previous version. */
+  metaChanges: string[];
 }
 
 export interface GovernanceSnapshot {
@@ -78,8 +126,12 @@ export interface Doc {
   ownerId: string | null;
   collaboratorIds: string[];
   readerIds: string[];
-  location: Location;
+  /** The countries it applies to, or ["Global"]. See appliesTo.ts. */
+  locations: Location[];
+  /** Teams within those countries it applies to; empty = every team there. */
+  audienceTeamIds: string[];
   status: DocStatus;
+  /** The team that maintains it: the team of whoever created it. */
   teamId: string;
   tags: string[];
   createdAt: string;
@@ -88,6 +140,20 @@ export interface Doc {
   verifications: Verification[];
   views: View[];
   supersededById?: string;
+  clientId?: string;
+  /** Never sent to Jev: scores and checks for it use the rules. Unset = false. */
+  confidential?: boolean;
+  /** Unset: at the top of the drive. */
+  folderId?: string;
+}
+
+/** A folder in the drive; folders nest through `parentId` (unset = top level). */
+export interface Folder {
+  id: string;
+  name: string;
+  parentId?: string;
+  createdById?: string;
+  createdAt: string;
 }
 
 export interface TrustScore {
@@ -98,6 +164,8 @@ export interface TrustScore {
   computedAt: string;
   inputHash: string;
   latencyMs: number;
+  /** Set when the score was estimated from rules instead: Jev couldn't be reached, or the document is confidential. Never stored. */
+  fallback?: { reason: string; confidential?: boolean };
 }
 
 export interface Signal {
@@ -117,7 +185,7 @@ export interface Conflict {
     title: string;
     lineNo: number;
     lineText: string;
-    location: Location;
+    locations: Location[];
     teamId: string;
     status: DocStatus;
     updatedAt: string;
@@ -130,6 +198,8 @@ export interface ConflictCheck {
   possible: Conflict[];
   pairsChecked: number;
   docsChecked: number;
+  /** Who decided: Jev, or the fixed rules when Jev was unavailable. */
+  method: "jev" | "rules";
 }
 
 /** A specific line that gives a reader reason to doubt the document. */
@@ -174,4 +244,8 @@ export interface Db {
   people: Person[];
   docs: Doc[];
   overrides: ConflictOverride[];
+  clients: Client[];
+  folders: Folder[];
+  /** The taxonomy as stored: topics, document types and countries. */
+  terms: Term[];
 }

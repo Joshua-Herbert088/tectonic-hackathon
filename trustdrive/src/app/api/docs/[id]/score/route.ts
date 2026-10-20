@@ -1,12 +1,9 @@
-import type { NextRequest } from "next/server";
-import { computeScore, DEFAULT_VIEWER } from "@/lib/service";
+import { requireViewer } from "@/lib/auth";
+import { handle, HttpError } from "@/lib/http";
+import { computeScore } from "@/lib/service";
 
-export async function POST(req: NextRequest, ctx: RouteContext<"/api/docs/[id]/score">) {
-  const { id } = await ctx.params;
-  try {
-    const trust = await computeScore(id, req.nextUrl.searchParams.get("viewer") ?? DEFAULT_VIEWER);
-    return Response.json({ trust });
-  } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 502 });
-  }
-}
+export const POST = handle(async (req, ctx: RouteContext<"/api/docs/[id]/score">) => {
+  const trust = await computeScore((await ctx.params).id, await requireViewer(req));
+  if (!trust) throw new HttpError(404, "Not found");
+  return Response.json({ trust });
+});

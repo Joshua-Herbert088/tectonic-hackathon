@@ -1,5 +1,6 @@
 "use client";
 
+import { formatLocations } from "@/lib/appliesTo";
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./AppContext";
 import { timeAgo } from "@/lib/time";
@@ -58,7 +59,7 @@ export function ConflictDialog({
               {n} conflict{n === 1 ? "" : "s"} with existing documents
             </h2>
             <p className="text-sm text-slate-600">
-              Jev found information that directly contradicts what&apos;s already in TrustDrive. Fix your document, fix the existing one, or override with a reason.
+              {check.method === "rules" ? "The conflict rules found" : "Jev found"} information that directly contradicts what&apos;s already in TrustDrive. Fix your document, fix the existing one, or override with a reason.
             </p>
           </div>
           <button onClick={onClose} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100" aria-label="Close">✕</button>
@@ -87,7 +88,8 @@ export function ConflictDialog({
             </details>
           )}
           <p className="text-[11px] text-slate-400">
-            Checked {check.pairsChecked} related statements across {check.docsChecked} documents with Jev.
+            Checked {check.pairsChecked} related statements across {check.docsChecked} documents{" "}
+            {check.method === "rules" ? "with the conflict rules (Jev unavailable): same subject, country, year and month, different value" : "with Jev"}.
           </p>
         </div>
 
@@ -163,7 +165,7 @@ function ConflictCard({ c, onEditMine, onEditExisting }: { c: Conflict; onEditMi
           </div>
           <div className="text-sm text-slate-900">{c.existing.lineText}</div>
           <div className="mt-1 text-[11px] text-slate-500">
-            {c.existing.location} · {teamName(c.existing.teamId)} · {c.existing.status} · edited {timeAgo(c.existing.updatedAt)}
+            {formatLocations(c.existing.locations)} · {teamName(c.existing.teamId)} · {c.existing.status} · edited {timeAgo(c.existing.updatedAt)}
             {c.existing.ownerId && ` · owner ${person(c.existing.ownerId)?.name ?? ""}`}
           </div>
         </div>
@@ -191,19 +193,21 @@ function ExistingDocEditor({ conflict, onClose, onSaved }: { conflict: Conflict;
   const ta = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    fetch(`/api/docs/${conflict.existing.docId}?viewer=${viewerId}`)
+    fetch(`/api/docs/${conflict.existing.docId}`)
       .then((r) => r.json())
       .then((d) => {
+        if (!d.doc) throw new Error(d.error ?? "Could not load the document.");
         setContent(d.doc.content);
         setTimeout(() => selectLine(ta.current, conflict.existing.lineNo), 50);
-      });
+      })
+      .catch((e) => setError((e as Error).message));
   }, [conflict.existing.docId, conflict.existing.lineNo, viewerId]);
 
   const save = async () => {
     setSaving(true);
     setError(null);
     setBlocking([]);
-    const res = await fetch(`/api/docs/${conflict.existing.docId}`, { method: "PATCH", body: JSON.stringify({ viewerId, content, acknowledgeSimilar: true }) });
+    const res = await fetch(`/api/docs/${conflict.existing.docId}`, { method: "PATCH", body: JSON.stringify({ content, acknowledgeSimilar: true }) });
     const json = await res.json();
     setSaving(false);
     if (res.ok) onSaved();
@@ -342,7 +346,8 @@ function SimilarList({ similar, compact }: { similar: SimilarDoc[]; compact?: bo
           <div className="min-w-0 flex-1">
             <a href={`/doc/${s.docId}`} target="_blank" className="truncate text-sm font-medium text-blue-700 hover:underline">{s.title} ↗</a>
             <div className="text-[11px] text-slate-500">
-              {s.label} · {s.location} · {teamName(s.teamId)} · {s.status} · edited {timeAgo(s.updatedAt)}
+              {s.label}
+              {s.method === "rules" && " (estimated from shared figures and terms)"} · {formatLocations(s.locations)} · {teamName(s.teamId)} · {s.status} · edited {timeAgo(s.updatedAt)}
               {s.ownerId && ` · owner ${person(s.ownerId)?.name ?? ""}`}
             </div>
           </div>

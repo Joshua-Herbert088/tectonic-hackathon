@@ -3,24 +3,31 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
 import { FileIcon } from "@/components/FileIcon";
+import { Icon } from "@/components/Icons";
 import { Markdown, type LineMark } from "@/components/Markdown";
 import { RecentOverlap } from "@/components/RecentOverlap";
-import { WhoToContact } from "@/components/WhoToContact";
-import type { Contact, FormerContributor } from "@/lib/contacts";
-import { StatusPill } from "@/components/StatusPill";
+import { ConfidentialPill, StatusPill } from "@/components/StatusPill";
+import { ConfidentialSwitch } from "@/components/UploadDialog";
+import { AppShell } from "@/components/AppShell";
 import { Avatar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
+import { AppliesToLabel, TagChip, TagDialog, type DocMeta } from "@/components/Tags";
+import { formatLocations } from "@/lib/appliesTo";
 import { VersionHistory } from "@/components/VersionHistory";
+import { WhoToContact } from "@/components/WhoToContact";
+import type { Contact, FormerContributor } from "@/lib/contacts";
+import { folderLabel, folderOptions } from "@/lib/folders";
 import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
-import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type Doubt, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
+import { STATUSES, type Client, type ConflictOverride, type Conversation, type Doc, type Doubt, type Folder, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
 
-const LEVEL_NAMES = ["Don't rely on it", "Likely outdated", "Uncertain", "Probably reliable", "Reliable", "Authoritative"];
+/** Non-breaking spaces: an option's text can't be indented with padding. */
+const INDENT = "\u00a0\u00a0\u00a0";
+const LEVEL_NAMES =["Don't rely on it", "Likely outdated", "Uncertain", "Probably reliable", "Reliable", "Authoritative"];
 
 interface Detail {
   doc: Doc;
@@ -33,11 +40,20 @@ interface Detail {
   governance: GovernanceSnapshot;
   conflictDecisions: { made: ConflictOverride[]; against: (ConflictOverride & { docTitle: string })[] };
   people: { contacts: Contact[]; former: FormerContributor[] };
+  client: Client | null;
+  sources: Conversation[];
+  folders: Folder[];
 }
 
 export default function DocPage() {
   const { id } = useParams<{ id: string }>();
-  const { viewerId, person, teamName, teams, people } = useApp();
+  const { viewerId } = useApp();
+  // A fresh instance per document and viewer, so no state carries over between them.
+  return <DocView key={`${id}:${viewerId}`} id={id} viewerId={viewerId} />;
+}
+
+function DocView({ id, viewerId }: { id: string; viewerId: string }) {
+  const { person, teamName, teams, people, taxonomy } = useApp();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [trust, setTrust] = useState<TrustScore | null>(null);
@@ -48,30 +64,33 @@ export default function DocPage() {
   const [draft, setDraft] = useState({ title: "", content: "" });
   const [showInput, setShowInput] = useState(false);
   const [justVerified, setJustVerified] = useState(false);
-  const [liveDoubts, setLiveDoubts] = useState<Doubt[] | null>(null);
-  const [doubtError, setDoubtError] = useState<string | null>(null);
+  const [live, setLive] = useState<{ key: string; doubts?: Doubt[]; error?: string } | null>(null);
   const [activeLine, setActiveLine] = useState<number | null>(null);
   const [showMarks, setShowMarks] = useState(true);
   const [handedTo, setHandedTo] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  // The score shown before a rescore, to display the change ("▲ from 34").
   const trustRef = useRef<TrustScore | null>(null);
-  trustRef.current = trust;
+  useEffect(() => {
+    trustRef.current = trust;
+  }, [trust]);
 
   const rescore = useCallback(async () => {
     setScoring(true);
     setScoreError(null);
     try {
-      const res = await fetch(`/api/docs/${id}/score?viewer=${viewerId}`, { method: "POST" });
+      const res = await fetch(`/api/docs/${id}/score`, { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
       setTrust(json.trust);
-      setDetail((d) => d && { ...d, history: [...d.history, { score: json.trust.score, computedAt: json.trust.computedAt }] });
+      // Estimates aren't stored, so they don't belong in the score history either.
+      if (!json.trust.fallback) setDetail((d) => d && { ...d, history: [...d.history, { score: json.trust.score, computedAt: json.trust.computedAt }] });
     } catch (e) {
       setScoreError((e as Error).message);
     } finally {
       setScoring(false);
     }
-  }, [id, viewerId]);
+  }, [id]);
 
   const apply = useCallback(
     (d: Detail) => {
@@ -87,19 +106,15 @@ export default function DocPage() {
   );
 
   useEffect(() => {
-    setDetail(null);
-    setLoadError(null);
-    setTrust(null);
-    setPrevious(null);
-    setJustVerified(false);
-    setHandedTo(null);
-    fetch(`/api/docs/${id}?viewer=${viewerId}`)
+    let cancelled = false;
+    fetch(`/api/docs/${id}`)
       .then(async (r) => {
         const d = await r.json();
-        if (!r.ok || !d?.doc) throw new Error(d?.error ?? "Could not load this document.");
+        if (!r.ok || !d?.doc) throw new Error(r.status === 404 ? "This document doesn't exist – it may have been moved to the trash (Drive → Trash), or the link is wrong." : (d?.error ?? "Could not load this document."));
         return d as Detail;
       })
       .then((d) => {
+        if (cancelled) return;
         apply(d);
         const params = new URLSearchParams(window.location.search);
         if (params.get("edit")) {
@@ -113,57 +128,89 @@ export default function DocPage() {
           window.history.replaceState(null, "", window.location.pathname);
         }
       })
-      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : "Could not load this document."));
+      .catch((e: unknown) => !cancelled && setLoadError(e instanceof Error ? e.message : "Could not load this document."));
+    return () => {
+      cancelled = true;
+    };
   }, [id, viewerId, apply]);
 
-  const patch = async (body: Record<string, unknown>) => {
-    const res = await fetch(`/api/docs/${id}`, { method: "PATCH", body: JSON.stringify({ viewerId, ...body }) });
-    apply(await res.json());
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  /** Runs a request that answers with the updated document; errors are shown instead of replacing the page. */
+  const act = async (url: string, method: "PATCH" | "POST", body: Record<string, unknown>) => {
+    setActionError(null);
+    try {
+      const res = await fetch(url, { method, body: JSON.stringify({ ...body }) });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Request failed (${res.status})`);
+      apply(json);
+      return true;
+    } catch (e) {
+      setActionError((e as Error).message);
+      return false;
+    }
   };
 
+  const patch = (body: Record<string, unknown>) => act(`/api/docs/${id}`, "PATCH", body);
+
   const verify = async () => {
-    const res = await fetch(`/api/docs/${id}/verify`, { method: "POST", body: JSON.stringify({ viewerId }) });
-    setJustVerified(true);
-    apply(await res.json());
+    if (await act(`/api/docs/${id}/verify`, "POST", {})) setJustVerified(true);
   };
+
+  // A document is tagged before its content is first saved: a new blank one, or an old one that never was.
+  const [taggingOpen, setTaggingOpen] = useState(false);
+  // What the tag dialog confirmed, sent with the save that follows (and its retries after a conflict).
+  const confirmedTags = useRef<DocMeta | null>(null);
 
   const saveGate = useSaveGate<Detail>({
     send: ({ overrideReason, acknowledgeSimilar }) =>
       fetch(`/api/docs/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ viewerId, ...draft, override: overrideReason ? { reason: overrideReason } : undefined, acknowledgeSimilar }),
+        body: JSON.stringify({ ...draft, ...(confirmedTags.current ?? {}), override: overrideReason ? { reason: overrideReason } : undefined, acknowledgeSimilar }),
       }),
     onSaved: (d) => {
+      confirmedTags.current = null;
       apply(d);
       setEditing(false);
     },
   });
+  const save = () => {
+    if (!confirmedTags.current && detail && taxonomy.missingTags(detail.doc.tags).length) setTaggingOpen(true);
+    else saveGate.save();
+  };
+
+  /** Filing a document isn't an edit: the score and history stay as they are. */
+  const moveTo = async (folderId: string | null) => {
+    setActionError(null);
+    const res = await fetch(`/api/docs/${id}/folder`, { method: "POST", body: JSON.stringify({ folderId }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return setActionError(json.error ?? `Request failed (${res.status})`);
+    setDetail((d) => d && { ...d, doc: { ...d.doc, folderId: folderId ?? undefined } });
+  };
 
   const transfer = async (ownerId: string) => {
-    const res = await fetch(`/api/docs/${id}/owner`, { method: "POST", body: JSON.stringify({ viewerId, ownerId }) });
-    if (!res.ok) return;
-    setHandedTo(ownerId);
-    apply(await res.json());
+    if (await act(`/api/docs/${id}/owner`, "POST", { ownerId })) setHandedTo(ownerId);
   };
 
   // Contradictions with other documents take a few Jev calls, so they arrive after the page.
-  const docKey = detail && `${detail.doc.id}@${detail.doc.updatedAt}@${detail.doc.location}@${detail.doc.teamId}`;
+  // Keyed by the document version, so results for an older version are never shown.
+  const docKey = detail && `${detail.doc.id}@${detail.doc.updatedAt}@${detail.doc.locations}@${detail.doc.teamId}`;
   useEffect(() => {
     if (!docKey) return;
     let cancelled = false;
-    setLiveDoubts(null);
-    setDoubtError(null);
     fetch(`/api/docs/${id}/doubts`)
       .then(async (r) => {
         const json = await r.json();
         if (!r.ok) throw new Error(json.error);
-        if (!cancelled) setLiveDoubts(json.doubts);
+        if (!cancelled) setLive({ key: docKey, doubts: json.doubts });
       })
-      .catch((e) => !cancelled && setDoubtError((e as Error).message));
+      .catch((e) => !cancelled && setLive({ key: docKey, error: (e as Error).message }));
     return () => {
       cancelled = true;
     };
   }, [id, docKey]);
+  const liveDoubts = live?.key === docKey ? (live.doubts ?? null) : null;
+  const doubtError = live?.key === docKey ? (live.error ?? null) : null;
 
   const doubts = useMemo(() => [...(detail?.doubts ?? []), ...(liveDoubts ?? [])].sort((a, b) => a.lineNo - b.lineNo || (a.tone === "bad" ? -1 : 1)), [detail?.doubts, liveDoubts]);
   const marks = useMemo(() => {
@@ -185,6 +232,8 @@ export default function DocPage() {
 
   const related = useScores(detail?.related ?? null, viewerId);
   const [tab, setTab] = useState<"why" | "people" | "history" | "details">("why");
+  // "Edit tags" in the Details tab: the same dialog, saving only the tags.
+  const [editingTags, setEditingTags] = useState(false);
 
   if (!detail) {
     return (
@@ -193,7 +242,7 @@ export default function DocPage() {
           {loadError ? (
             <div className="text-center">
               <p>{loadError}</p>
-              <Link href="/" className="mt-2 inline-block text-blue-700 hover:underline">Back to drive</Link>
+              <Link href="/drive" className="mt-2 inline-block text-blue-700 hover:underline">Back to the drive</Link>
             </div>
           ) : "Loading…"}
         </div>
@@ -212,22 +261,52 @@ export default function DocPage() {
   // One plain sentence on why, from the strongest facts: problems first unless it's trusted.
   const reasons = trust && trust.score >= 75 ? good : bad.length ? bad : good;
   const verdict = reasons.slice(0, 2).map((s) => s.text).join(" · ");
+  const folder = folderLabel(detail.folders, doc.folderId);
+  const driveHref = doc.folderId && folder ? `/drive?folder=${doc.folderId}` : "/drive";
   const tabs = [
     { id: "why" as const, label: "Why", count: doubts.length },
     { id: "people" as const, label: "People", count: handover ? 1 : 0 },
     { id: "history" as const, label: "History", count: 0 },
     { id: "details" as const, label: "Details", count: 0 },
   ];
-  const field = "rounded-lg border border-slate-300 bg-white px-2 py-1.5 disabled:opacity-60";
 
   return (
     <AppShell compact>
+      {taggingOpen && (
+        <TagDialog
+          title={draft.title}
+          content={draft.content}
+          initial={metaOf(doc)}
+          confidential={!!doc.confidential}
+          action="Save"
+          onClose={() => setTaggingOpen(false)}
+          onConfirm={(m) => {
+            setTaggingOpen(false);
+            confirmedTags.current = m;
+            saveGate.save();
+          }}
+        />
+      )}
+      {editingTags && (
+        <TagDialog
+          title={doc.title}
+          content={doc.content}
+          initial={metaOf(doc)}
+          heading="Edit tags"
+          confidential={!!doc.confidential}
+          action="Save tags"
+          onClose={() => setEditingTags(false)}
+          onConfirm={async (m) => {
+            if (await patch({ ...m })) setEditingTags(false);
+          }}
+        />
+      )}
       <SaveGateDialogs gate={saveGate} onEditMine={(lineNo) => setTimeout(() => selectLine(editorRef.current, lineNo), 50)} />
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:flex-row lg:overflow-visible">
         {/* Document */}
         <main className="flex min-w-0 shrink-0 flex-col rounded-2xl bg-white lg:min-h-0 lg:flex-1 lg:shrink">
           <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-3">
-            <Link href="/" className="mt-0.5 rounded-full p-2 hover:bg-slate-100" aria-label="Back to drive">
+            <Link href={driveHref} className="mt-0.5 rounded-full p-2 hover:bg-slate-100" aria-label={folder ? `Back to ${folder}` : "Back to the drive"}>
               <svg width="20" height="20" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z" fill="#444746" /></svg>
             </Link>
             <FileIcon kind={doc.kind} size={24} />
@@ -239,16 +318,27 @@ export default function DocPage() {
               )}
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
                 <StatusPill status={doc.status} />
+                {doc.confidential && <ConfidentialPill />}
+                {folder && (
+                  <Link href={driveHref} className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 hover:underline" title="Open the folder">
+                    <Icon name="folder" size={13} color="#5f6368" /> {folder}
+                  </Link>
+                )}
+                {detail.client && (
+                  <Link href={`/drive?client=${detail.client.id}`} className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 hover:underline">{detail.client.name}</Link>
+                )}
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{teamName(doc.teamId)}</span>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700" title="Applies to">{doc.location}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700" title="Applies to">
+                  <AppliesToLabel locations={doc.locations} teamIds={doc.audienceTeamIds} />
+                </span>
                 <span>edited {timeAgo(doc.updatedAt)} by {person(doc.lastEditedById)?.name ?? "unknown"}</span>
               </div>
             </div>
             {editing ? (
               <div className="flex shrink-0 gap-2">
-                <button onClick={() => setEditing(false)} className="rounded-full px-4 py-1.5 text-sm text-blue-700 hover:bg-blue-50">Cancel</button>
+                <button onClick={() => { confirmedTags.current = null; setEditing(false); }} className="rounded-full px-4 py-1.5 text-sm text-blue-700 hover:bg-blue-50">Cancel</button>
                 <button
-                  onClick={() => saveGate.save()}
+                  onClick={save}
                   disabled={saveGate.busy}
                   className="rounded-full bg-[#0b57d0] px-5 py-1.5 text-sm font-medium text-white hover:bg-[#0842a0] disabled:opacity-60"
                 >
@@ -270,6 +360,7 @@ export default function DocPage() {
 
           <RecentOverlap docId={doc.id} viewerId={viewerId} />
           {saveGate.error && !saveGate.mode && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
+          {actionError && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{actionError}</div>}
           {!editing && doubts.length > 0 && showMarks && (
             <div className="flex items-center gap-2 border-b border-slate-100 bg-[#fffbf0] px-5 py-1.5 text-xs text-[#7a4a00]">
               {doubts.length} line{doubts.length === 1 ? "" : "s"} highlighted – click one to see why.
@@ -319,9 +410,10 @@ export default function DocPage() {
                       )}
                     </div>
                     {verdict && <p className="mt-1 text-sm leading-5 text-slate-700">{verdict}</p>}
+                    {trust.fallback && <p className="mt-1 text-[11px] text-slate-500">{trust.fallback.confidential ? "Estimated with fixed rules – this document is confidential, so it's never sent to Jev." : "Estimated with fixed rules – Jev is unavailable."}</p>}
                   </>
                 ) : (
-                  <div className="text-sm text-slate-500">{scoreError ? "Jev scoring failed" : "Asking Jev…"}</div>
+                  <div className="text-sm text-slate-500">{scoreError ? "Scoring failed" : "Asking Jev…"}</div>
                 )}
               </div>
             </div>
@@ -380,7 +472,7 @@ export default function DocPage() {
                   {!liveDoubts && !doubtError && (
                     <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
                       <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-[#0b57d0]" />
-                      Jev is checking each line against other documents…
+                      Checking each line against other documents…
                     </div>
                   )}
                   {doubtError && <div className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">Couldn&apos;t check for contradictions: {doubtError}</div>}
@@ -393,8 +485,8 @@ export default function DocPage() {
                 </section>
                 {(detail.conflictDecisions.made.length > 0 || detail.conflictDecisions.against.length > 0) && (
                   <section className="p-5">
-                    <h3 className="mb-1 text-sm font-medium text-slate-800">Conflict decisions</h3>
-                    <p className="mb-3 text-[11px] text-slate-500">Saved despite a contradiction Jev found. Kept permanently for accountability.</p>
+                    <h3 className="mb-1 text-sm font-medium text-slate-800">Known exceptions</h3>
+                    <p className="mb-3 text-[11px] text-slate-500">Saved despite a contradiction, with the reason. Read these before “fixing” a line.</p>
                     <ul className="space-y-3">
                       {detail.conflictDecisions.made.map((o) => (
                         <OverrideRow key={`m${o.id}`} o={o} otherId={o.existingDocId} otherTitle={o.existingTitle} ours={{ no: o.lineNo, text: o.lineText }} theirs={{ no: o.existingLineNo, text: o.existingLineText }} />
@@ -438,19 +530,24 @@ export default function DocPage() {
                           );
                         })}
                       </ul>
-                      {doc.ownerId !== viewerId && !handover.successors.some((s) => s.personId === viewerId) && (
-                        <button onClick={() => transfer(viewerId)} className="mt-3 text-xs font-medium text-blue-700 hover:underline">Take ownership myself</button>
-                      )}
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                        {doc.ownerId !== viewerId && !handover.successors.some((s) => s.personId === viewerId) && (
+                          <button onClick={() => transfer(viewerId)} className="text-xs font-medium text-blue-700 hover:underline">Take ownership myself</button>
+                        )}
+                        {owner && (
+                          <Link href={`/handover/${owner.id}`} className="text-xs font-medium text-blue-700 hover:underline">Handover briefing for {owner.name} →</Link>
+                        )}
+                      </div>
                     </div>
                   </section>
                 )}
                 {handedTo && !handover && (
                   <div className="m-5 rounded-xl bg-[#e6f4ea] p-3 text-xs text-[#0d652d]">
-                    Handed over to <span className="font-medium">{handedTo === viewerId ? "you" : person(handedTo)?.name}</span>. Jev rescored the document with its new owner.
+                    Handed over to <span className="font-medium">{handedTo === viewerId ? "you" : person(handedTo)?.name}</span>. The document was rescored with its new owner.
                   </div>
                 )}
-                <WhoToContact contacts={detail.people.contacts} former={detail.people.former} />
-                <section className="p-5">
+                <WhoToContact docTitle={doc.title} contacts={detail.people.contacts} former={detail.people.former} />
+                <section className="border-b border-slate-100 p-5">
                   <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
                   <PersonRow label="Owner" id={doc.ownerId} />
                   {doc.collaboratorIds.map((c) => <PersonRow key={c} label="Collaborator" id={c} />)}
@@ -462,6 +559,24 @@ export default function DocPage() {
                   )}
                   {!owner && <div className="mt-2 text-xs text-[#c5221f]">This document has no owner.</div>}
                 </section>
+                {detail.sources.length > 0 && (
+                  <section className="p-5">
+                    <h3 className="text-sm font-medium text-slate-800">Written from {detail.sources.length} conversation{detail.sources.length === 1 ? "" : "s"}</h3>
+                    <p className="mb-2 text-[11px] text-slate-500">Each line cites one of these by its letter. Open one to check what was said.</p>
+                    <ul className="space-y-1">
+                      {[...detail.sources].sort((a, b) => (a.messages[0]?.sentAt ?? a.createdAt).localeCompare(b.messages[0]?.sentAt ?? b.createdAt)).map((c, i) => (
+                        <li key={c.id}>
+                          <Link href={`/conversations?c=${c.id}`} className="-mx-2 flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-50">
+                            <span className="w-5 text-xs text-slate-500">[{"abcdefghijklmnopqrstuvwxyz"[i % 26]}]</span>
+                            <span className="text-xs">{c.source === "email" ? "✉" : "💬"}</span>
+                            <span className="min-w-0 flex-1 truncate text-slate-800">{c.title}</span>
+                            <span className="shrink-0 text-[11px] text-slate-500">{c.messages.length} msg · {timeAgo(c.messages.at(-1)?.sentAt ?? c.createdAt)}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
               </>
             )}
 
@@ -482,43 +597,54 @@ export default function DocPage() {
                   <h3 className="mb-3 text-sm font-medium text-slate-800">Details</h3>
                   <div className="grid grid-cols-[100px_1fr] items-center gap-2 text-sm">
                     <label className="text-xs text-slate-500" htmlFor="doc-status">Status</label>
-                    <select id="doc-status" value={doc.status} onChange={(e) => patch({ status: e.target.value })} disabled={!canEdit} className={field}>
+                    <select id="doc-status" value={doc.status} onChange={(e) => patch({ status: e.target.value })} disabled={!canEdit} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 disabled:opacity-60">
                       {STATUSES.map((s) => <option key={s}>{s}</option>)}
                     </select>
-                    <label className="text-xs text-slate-500" htmlFor="doc-location">Applies to</label>
-                    <select id="doc-location" value={doc.location} onChange={(e) => patch({ location: e.target.value })} disabled={!canEdit} className={field}>
-                      {LOCATIONS.map((l) => <option key={l}>{l}</option>)}
-                    </select>
-                    <label className="text-xs text-slate-500" htmlFor="doc-team">Team</label>
-                    <select id="doc-team" value={doc.teamId} onChange={(e) => patch({ teamId: e.target.value })} disabled={!canEdit} className={field}>
-                      {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    <span className="text-xs text-slate-500">Maintained by</span>
+                    <span className="px-2 text-slate-800" title="The team of whoever created the document">{teamName(doc.teamId)}</span>
+                  </div>
+                  <div className="mt-3">
+                    <ConfidentialSwitch checked={!!doc.confidential} onChange={(on) => patch({ confidential: on })} disabled={!canEdit} />
+                  </div>
+                  <div className="mt-3 grid grid-cols-[100px_1fr] items-center gap-2 text-sm">
+                    <label className="text-xs text-slate-500" htmlFor="doc-folder">Folder</label>
+                    <select id="doc-folder" value={doc.folderId ?? ""} onChange={(e) => moveTo(e.target.value || null)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5">
+                      <option value="">Top of the drive</option>
+                      {folderOptions(detail.folders).map(({ folder: f, depth }) => (
+                        <option key={f.id} value={f.id}>{`${INDENT.repeat(depth)}${f.name}`}</option>
+                      ))}
                     </select>
                   </div>
-                  {!canEdit && <p className="mt-2 text-[11px] text-slate-500">Only the owner and collaborators can change these.</p>}
+                  {!canEdit && <p className="mt-2 text-[11px] text-slate-500">Only the owner and collaborators can change the status and tags.</p>}
                 </section>
                 <section className="border-b border-slate-100 p-5">
-                  <h3 className="mb-2 text-sm font-medium text-slate-800">Governance snapshot</h3>
-                  <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                    <span className="text-xs uppercase tracking-wide text-slate-500">Knowledge integrity</span>
-                    <span className="text-lg font-semibold text-slate-800">{governance.score}/100</span>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-medium text-slate-800">Tags</h3>
+                    {canEdit && (
+                      <button onClick={() => setEditingTags(true)} className="rounded-full bg-white px-3 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50">
+                        Edit tags
+                      </button>
+                    )}
                   </div>
-                  <ul className="mb-3 space-y-2 text-sm text-slate-700">
-                    {governance.signals.map((signal, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#0b57d0]" /> <span>{signal}</span></li>)}
-                  </ul>
-                  {governance.facts.length > 0 && (
-                    <>
-                      <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Fact graph</div>
-                      <ul className="space-y-2 text-xs text-slate-600">
-                        {governance.facts.slice(0, 3).map((fact) => (
-                          <li key={`${fact.sourceDocId}-${fact.lineNo}`} className="rounded-lg border border-slate-200 p-2">
-                            <div className="font-medium text-slate-800">{fact.subject}</div>
-                            <div>{fact.value} {fact.unit ? `· ${fact.unit}` : ""}</div>
-                            <div>{fact.country ?? fact.office ?? "Global"} · team {fact.teamId ?? doc.teamId} · {fact.approvalStatus}</div>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+                  <dl className="grid grid-cols-[100px_1fr] items-start gap-x-2 gap-y-2.5 text-sm">
+                    <dt className="pt-0.5 text-xs text-slate-500">Type</dt>
+                    <dd className="flex flex-wrap gap-1.5">
+                      {doc.tags.filter((t) => taxonomy.docType.has(t)).map((t) => <TagChip key={t} id={t} />)}
+                      {!doc.tags.some((t) => taxonomy.docType.has(t)) && <span className="text-xs text-[#b06000]">Not set – asked for on the next save</span>}
+                    </dd>
+                    <dt className="pt-0.5 text-xs text-slate-500">Topics</dt>
+                    <dd className="flex flex-wrap gap-1.5">
+                      {doc.tags.filter((t) => !taxonomy.docType.has(t)).map((t) => <TagChip key={t} id={t} />)}
+                      {!doc.tags.some((t) => taxonomy.topic.has(t)) && <span className="text-xs text-[#b06000]">None yet</span>}
+                    </dd>
+                    <dt className="text-xs text-slate-500">Applies to</dt>
+                    <dd className="text-slate-800">
+                      <AppliesToLabel locations={doc.locations} teamIds={doc.audienceTeamIds} />
+                      {!doc.audienceTeamIds.length && <span className="text-xs text-slate-500"> · all teams</span>}
+                    </dd>
+                    <dt className="text-xs text-slate-500">Client</dt>
+                    <dd className="text-slate-800">{detail.client ? <Link href={`/client/${detail.client.id}`} className="hover:underline">{detail.client.name}</Link> : <span className="text-slate-500">–</span>}</dd>
+                  </dl>
                 </section>
                 {detail.related.length > 0 && (
                   <section className="border-b border-slate-100 p-5">
@@ -531,7 +657,7 @@ export default function DocPage() {
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-sm text-slate-800">{r.title}</div>
                               <div className="flex items-center gap-2 text-xs text-slate-500">
-                                <StatusPill status={r.status} /> {r.location} · {timeAgo(r.updatedAt)}
+                                <StatusPill status={r.status} /> {formatLocations(r.locations)} · {timeAgo(r.updatedAt)}
                               </div>
                             </div>
                           </Link>
@@ -544,9 +670,9 @@ export default function DocPage() {
                   <h3 className="mb-1 text-sm font-medium text-slate-800">How the score was made</h3>
                   {trust && !scoring && (
                     <>
-                      <LevelBars probs={trust.levelProbabilities} />
+                      {!trust.fallback && <LevelBars probs={trust.levelProbabilities} />}
                       <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
-                        <span>{trust.model} · {Math.round(trust.confidence * 100)}% confident · {trust.latencyMs}ms</span>
+                        <span>{trust.fallback ? trust.model : `${trust.model} · ${Math.round(trust.confidence * 100)}% confident · ${trust.latencyMs}ms`}</span>
                         <button onClick={rescore} className="text-blue-700 hover:underline">Rescore</button>
                       </div>
                     </>
@@ -565,39 +691,41 @@ export default function DocPage() {
       </div>
     </AppShell>
   );
+}
 
-  function OverrideRow({ o, otherId, otherTitle, ours, theirs }: { o: ConflictOverride; otherId: string; otherTitle: string; ours: { no: number; text: string }; theirs: { no: number; text: string } }) {
-    const p = person(o.personId);
-    return (
-      <li className="rounded-xl bg-[#fef7e0] p-3 text-xs text-slate-700">
-        <div className="mb-1.5 flex items-center gap-2">
-          <Avatar person={p} size={20} />
-          <span>
-            <span className="font-medium text-slate-900">{p?.name ?? o.personId}</span> overrode {Math.round(o.probability * 100)}% conflict · {timeAgo(o.at)}
-          </span>
-        </div>
-        <div>This doc, line {ours.no}: “{ours.text}”</div>
-        <div>
-          <Link href={`/doc/${otherId}`} className="text-blue-700 hover:underline">{otherTitle}</Link>, line {theirs.no}: “{theirs.text}”
-        </div>
-        <div className="mt-1.5 italic text-slate-600">Reason: {o.reason}</div>
-      </li>
-    );
-  }
-
-  function PersonRow({ label, id }: { label: string; id: string | null }) {
-    const p = person(id);
-    return (
-      <div className="mb-2 flex items-center gap-2">
-        <span className="w-24 text-xs text-slate-500">{label}</span>
-        <Avatar person={p} size={24} />
-        <div className="min-w-0 text-sm">
-          <span className={p && !p.active ? "text-slate-400 line-through" : "text-slate-800"}>{p?.name ?? "—"}</span>
-          {p && !p.active && <span className="ml-1 text-xs text-[#c5221f]">left {timeAgo(p.leftAt!)}</span>}
-        </div>
+function OverrideRow({ o, otherId, otherTitle, ours, theirs }: { o: ConflictOverride; otherId: string; otherTitle: string; ours: { no: number; text: string }; theirs: { no: number; text: string } }) {
+  const { person } = useApp();
+  const p = person(o.personId);
+  return (
+    <li className="rounded-xl bg-[#fef7e0] p-3 text-xs text-slate-700">
+      <div className="mb-1.5 flex items-center gap-2">
+        <Avatar person={p} size={20} />
+        <span>
+          <span className="font-medium text-slate-900">{p?.name ?? o.personId}</span> overrode {Math.round(o.probability * 100)}% conflict · {timeAgo(o.at)}
+        </span>
       </div>
-    );
-  }
+      <div>This doc, line {ours.no}: “{ours.text}”</div>
+      <div>
+        <Link href={`/doc/${otherId}`} className="text-blue-700 hover:underline">{otherTitle}</Link>, line {theirs.no}: “{theirs.text}”
+      </div>
+      <div className="mt-1.5 italic text-slate-600">Reason: {o.reason}</div>
+    </li>
+  );
+}
+
+function PersonRow({ label, id }: { label: string; id: string | null }) {
+  const { person } = useApp();
+  const p = person(id);
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <span className="w-24 text-xs text-slate-500">{label}</span>
+      <Avatar person={p} size={24} />
+      <div className="min-w-0 text-sm">
+        <span className={p && !p.active ? "text-slate-400 line-through" : "text-slate-800"}>{p?.name ?? "—"}</span>
+        {p && !p.active && p.leftAt && <span className="ml-1 text-xs text-[#c5221f]">left {timeAgo(p.leftAt)}</span>}
+      </div>
+    </div>
+  );
 }
 
 function DoubtRow({ d, active, onFocus }: { d: Doubt; active: boolean; onFocus: () => void }) {
@@ -621,7 +749,7 @@ function DoubtRow({ d, active, onFocus }: { d: Doubt; active: boolean; onFocus: 
           <div className="mt-1.5 border-t border-slate-200 pt-1.5 text-slate-600">
             <Link href={`/doc/${d.source.docId}`} onClick={(e) => e.stopPropagation()} className="text-blue-700 hover:underline">{d.source.title}</Link>, line {d.source.lineNo}: “{d.source.lineText}”
             <div className="mt-0.5 text-[11px] text-slate-500">
-              {d.source.status} · {d.source.location} · edited {timeAgo(d.source.updatedAt)}
+              {d.source.status} · {formatLocations(d.source.locations)} · edited {timeAgo(d.source.updatedAt)}
             </div>
           </div>
         )}
@@ -673,8 +801,9 @@ function History({ points }: { points: { score: number; computedAt: string }[] }
   const y = (s: number) => h - 4 - (s / 100) * (h - 8);
   const d = points.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.score)}`).join(" ");
   return (
-    <div className="mt-4">
-      <div className="mb-1 text-[11px] text-slate-500">Score history for you ({points.length} scores)</div>
+    <div>
+      <div className="mb-1 text-sm font-medium text-slate-800">Score history for you</div>
+      <div className="mb-2 text-[11px] text-slate-500">{points.length} scores, oldest first</div>
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
         <path d={d} fill="none" stroke="#0b57d0" strokeWidth="1.5" />
         {points.map((p, i) => (
@@ -685,4 +814,9 @@ function History({ points }: { points: { score: number; computedAt: string }[] }
       </svg>
     </div>
   );
+}
+
+/** A document's tags as the tag dialog edits them. */
+function metaOf(doc: Doc): DocMeta {
+  return { locations: doc.locations, audienceTeamIds: doc.audienceTeamIds, clientId: doc.clientId ?? null, tags: doc.tags };
 }

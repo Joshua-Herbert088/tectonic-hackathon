@@ -1,7 +1,21 @@
-import type { Db, Doc, Person, Team } from "./types";
+import { DEFAULT_TERMS } from "./taxonomy";
+import type { Client, ConflictOverride, Conversation, Db, Doc, Folder, Location, Participant, Person, Team } from "./types";
+
+/** Demo documents are written with one country; `audienceTeamIds` only where a document is for specific teams. */
+type SeedDoc = Omit<Doc, "locations" | "audienceTeamIds"> & { location: Location; audienceTeamIds?: string[] };
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
+
+const DIALING_CODES: Record<Person["location"], string> = { Belgium: "+32", Netherlands: "+31", France: "+33", Germany: "+49", Global: "+32" };
+
+/** Demo work email (reserved .example domain) and phone number, derived from name and location. */
+function withContactDetails(people: Person[]): Person[] {
+  return people.map((p, i) => {
+    const handle = p.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]+/g, ".");
+    return { ...p, email: `${handle}@trustdrive.example`, phone: `${DIALING_CODES[p.location]} 400 00 ${String(10 + i).padStart(2, "0")}` };
+  });
+}
 
 export function buildSeed(now = Date.now()): Db {
   const ago = (days: number, hours = 0) => new Date(now - days * DAY - hours * HOUR).toISOString();
@@ -17,7 +31,7 @@ export function buildSeed(now = Date.now()): Db {
     { id: "cs", name: "Customer Success" },
   ];
 
-  const people: Person[] = [
+  const people: Person[] = withContactDetails([
     { id: "lotte", name: "Lotte Peeters", role: "Senior Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(2400), color: "#1a73e8" },
     { id: "jonas", name: "Jonas Maes", role: "Payroll Consultant", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(120), color: "#e8710a" },
     { id: "an", name: "An Claes", role: "Payroll Team Lead", teamId: "pay-be", location: "Belgium", active: true, joinedAt: ago(3100), color: "#188038" },
@@ -42,12 +56,12 @@ export function buildSeed(now = Date.now()): Db {
     { id: "bram", name: "Bram Goossens", role: "Time & Attendance Engineer", teamId: "time", location: "Belgium", active: true, joinedAt: ago(1400), previousTeamId: "cs", movedTeamAt: ago(200), color: "#546e7a" },
     { id: "inge", name: "Inge Smets", role: "HR Operations Specialist", teamId: "hr-ops", location: "Belgium", active: true, joinedAt: ago(800), color: "#d84315" },
     { id: "ruben", name: "Ruben Dierckx", role: "Customer Success Lead", teamId: "cs", location: "Belgium", active: false, joinedAt: ago(1900), leftAt: ago(160), color: "#5e35b1" },
-  ];
+  ]);
 
   const views = (ids: string[], spreadDays: number) =>
     ids.map((personId, i) => ({ personId, at: ago((i * spreadDays) / Math.max(ids.length, 1), i) }));
 
-  const docs: Doc[] = [
+  const seedDocs: SeedDoc[] = [
     {
       id: "be-yearend-2026",
       title: "Year-end payroll closing procedure – Belgium 2026",
@@ -241,7 +255,7 @@ Register absences via mysdworx Time; codes S1 (sick) and S2 (relapse within 14 d
       location: "Global",
       status: "Completed",
       teamId: "pay-be",
-      tags: ["holiday-pay", "faq", "payroll-processing"],
+      tags: ["holiday-pay", "guide", "payroll-processing"],
       createdAt: ago(900),
       updatedAt: ago(500),
       lastEditedById: "daan",
@@ -939,6 +953,287 @@ TT-300 terminals must be replaced; customers were informed in March 2026.`,
 - Log every request in the privacy register, including the response date.`,
     },
     {
+      id: "client-noordkaai",
+      clientId: "noordkaai",
+      title: "Client file – Noordkaai Logistics",
+      kind: "doc",
+      ownerId: "pieter",
+      collaboratorIds: [],
+      readerIds: ["an", "jonas", "sofie"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["client", "expenses", "payroll-processing"],
+      createdAt: ago(1300),
+      updatedAt: ago(765),
+      lastEditedById: "pieter",
+      verifications: [{ personId: "pieter", at: ago(765) }],
+      views: views(["sofie", "an"], 40),
+      content: `# Client file – Noordkaai Logistics
+
+## Setup
+- Joint committee 226, monthly pay, 140 employees
+- Meal vouchers: €8 per working day
+- Extra payroll run on 15 July for the summer bonus
+
+## Client-specific agreements
+- Mileage allowance: €0.45/km (own company collective agreement, clause 4.2)
+- Drivers' overtime is paid out monthly, not recovered
+
+Contact at the client: HR manager, via the client portal.`,
+    },
+    {
+      id: "noordkaai-agreement",
+      clientId: "noordkaai",
+      title: "Noordkaai Logistics – service agreement overview",
+      kind: "doc",
+      ownerId: "an",
+      collaboratorIds: ["sofie"],
+      readerIds: ["jonas", "nina", "lotte"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["client", "client-service", "year-end", "reference"],
+      createdAt: ago(1500),
+      updatedAt: ago(40),
+      lastEditedById: "an",
+      verifications: [{ personId: "an", at: ago(40) }],
+      views: views(["sofie", "jonas", "nina", "sofie"], 30),
+      content: `# Noordkaai Logistics – service agreement overview
+
+## Scope
+- Full payroll for 140 employees (white- and blue-collar), joint committee 226
+- Monthly pay; payslips in the client portal by the 3rd working day
+- Year-end tax forms (281.10) and DmfA declarations included
+
+## Service levels
+- Replies to the client within 2 working days
+- Corrections reported before the 25th are paid in the same month
+
+## Account team
+- Payroll consultant: Sofie Willems (since Pieter Wouters left)
+- Backup: Lotte Peeters
+- Customer Success: Nina Vermeulen`,
+    },
+    {
+      id: "noordkaai-calendar-2027",
+      clientId: "noordkaai",
+      title: "Noordkaai Logistics – payroll calendar 2027",
+      kind: "sheet",
+      ownerId: "sofie",
+      collaboratorIds: [],
+      readerIds: ["an", "lotte"],
+      location: "Belgium",
+      status: "WIP",
+      teamId: "pay-be",
+      tags: ["client", "deadlines", "payroll-processing", "reference"],
+      createdAt: ago(15),
+      updatedAt: ago(2),
+      lastEditedById: "sofie",
+      verifications: [],
+      views: views(["an", "lotte"], 10),
+      content: `# Noordkaai Logistics – payroll calendar 2027
+
+| Run | Payment date | Note |
+|---|---|---|
+| January 2027 | 29 Jan | Indexation applied |
+| February 2027 | 26 Feb | |
+| March 2027 | 31 Mar | |
+| Summer bonus (extra run) | 15 Jul | Input deadline to confirm with Els |
+| December 2027 | 22 Dec | Year-end bonus |`,
+    },
+    {
+      id: "noordkaai-onboarding-2022",
+      clientId: "noordkaai",
+      title: "Noordkaai Logistics – onboarding checklist (2022)",
+      kind: "doc",
+      ownerId: "pieter",
+      collaboratorIds: [],
+      readerIds: ["an"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["client", "onboarding", "allowance", "checklist"],
+      createdAt: ago(1350),
+      updatedAt: ago(1340),
+      lastEditedById: "pieter",
+      verifications: [],
+      views: views(["sofie"], 60),
+      content: `# Noordkaai Logistics – onboarding checklist (2022)
+
+- Joint committee 226, monthly pay, 120 employees
+- Meal vouchers: €7 per working day
+- Drivers' overtime: recovered as time off within 3 months
+- Mileage allowance: according to the general travel policy
+- Contact: Els Vermeiren (HR manager)`,
+    },
+    {
+      id: "client-delinde",
+      clientId: "delinde",
+      title: "Client file – Brouwerij De Linde (overview)",
+      kind: "doc",
+      ownerId: "lotte",
+      collaboratorIds: ["karim"],
+      readerIds: ["an"],
+      location: "Belgium",
+      status: "Completed",
+      teamId: "pay-be",
+      tags: ["client", "client-service", "reference"],
+      createdAt: ago(400),
+      updatedAt: ago(35),
+      lastEditedById: "lotte",
+      verifications: [{ personId: "lotte", at: ago(35) }],
+      views: views(["karim", "an"], 20),
+      content: `# Client file – Brouwerij De Linde (overview)
+
+## Setup
+- Joint committee 118 (food industry), monthly pay, 65 employees
+- Seasonal workers in summer: student contracts, registered in Dimona
+- Meal vouchers: €8 per working day
+
+## Client-specific agreements
+- Year-end bonus paid with the November payroll run
+- Contact at the client: Hilde Peeters (HR & finance)`,
+    },
+    {
+      id: "client-morel",
+      clientId: "morel",
+      title: "Dossier client – Transports Morel SAS (aperçu)",
+      kind: "doc",
+      ownerId: "camille",
+      collaboratorIds: ["lea"],
+      readerIds: [],
+      location: "France",
+      status: "Completed",
+      teamId: "pay-fr",
+      tags: ["client", "client-service", "reference"],
+      createdAt: ago(500),
+      updatedAt: ago(70),
+      lastEditedById: "lea",
+      verifications: [{ personId: "lea", at: ago(70) }],
+      views: views(["camille", "lea"], 40),
+      content: `# Dossier client – Transports Morel SAS (aperçu)
+
+## Paramétrage
+- Convention collective des transports routiers, 210 salariés
+- Paie mensuelle, DSN déposée le 5 du mois
+- Mutuelle d'entreprise : prise en charge employeur 60 %
+
+## Accords spécifiques
+- Primes de nuit des chauffeurs versées le mois suivant
+- Contact chez le client : Sophie Morel (DRH)`,
+    },
+    {
+      id: "client-mueller",
+      clientId: "mueller",
+      title: "Kundenakte – Müller Maschinenbau GmbH (Überblick)",
+      kind: "doc",
+      ownerId: "felix",
+      collaboratorIds: ["lena"],
+      readerIds: [],
+      location: "Germany",
+      status: "To be reviewed",
+      teamId: "pay-de",
+      tags: ["client", "client-service", "reference"],
+      createdAt: ago(300),
+      updatedAt: ago(140),
+      lastEditedById: "felix",
+      verifications: [],
+      views: views(["lena"], 30),
+      content: `# Kundenakte – Müller Maschinenbau GmbH (Überblick)
+
+## Einrichtung
+- Tarifvertrag Metall- und Elektroindustrie, 340 Beschäftigte
+- Monatliche Lohnabrechnung, Auszahlung am letzten Bankarbeitstag
+- Urlaubsgeld mit der Juni-Abrechnung
+
+## Kundenspezifische Vereinbarungen
+- Schichtzulagen werden im Folgemonat abgerechnet
+- Ansprechpartner beim Kunden: Jens Müller (Personalleitung)`,
+    },
+    {
+      id: "client-havenstaal",
+      clientId: "havenstaal",
+      title: "Klantdossier Havenstaal BV – overzicht",
+      kind: "doc",
+      ownerId: "daan",
+      collaboratorIds: [],
+      readerIds: ["lars", "sanne"],
+      location: "Netherlands",
+      status: "Completed",
+      teamId: "pay-nl",
+      tags: ["client", "reference"],
+      createdAt: ago(700),
+      updatedAt: ago(320),
+      lastEditedById: "daan",
+      verifications: [{ personId: "daan", at: ago(320) }],
+      views: views(["sanne", "lars"], 60),
+      content: `# Klantdossier Havenstaal BV – overzicht
+
+## Inrichting
+- CAO Metalektro, 85 medewerkers
+- Verloning per 4 weken (13 periodes per jaar)
+- Reiskostenvergoeding: €0,23 per km
+
+## Afspraken
+- Vakantiegeld: volledig uitbetaald in mei
+- Overuren worden per periode uitbetaald
+
+Contact bij de klant: HR, via het klantportaal.`,
+    },
+    {
+      id: "havenstaal-afspraken",
+      clientId: "havenstaal",
+      title: "Havenstaal BV – overzicht contactpersonen en afspraken",
+      kind: "doc",
+      ownerId: "lars",
+      collaboratorIds: ["emma"],
+      readerIds: ["sanne"],
+      location: "Netherlands",
+      status: "Completed",
+      teamId: "pay-nl",
+      tags: ["client", "client-service", "holiday-pay", "reference"],
+      createdAt: ago(190),
+      updatedAt: ago(10),
+      lastEditedById: "lars",
+      verifications: [{ personId: "lars", at: ago(10) }],
+      views: views(["emma", "sanne", "emma"], 20),
+      content: `# Havenstaal BV – overzicht contactpersonen en afspraken
+
+## Contactpersonen
+- Marloes Vink – HR-manager, voor alle vragen over de verloning
+
+## Afspraken
+- Vakantiegeld: 50% in mei en 50% in december, vanaf 2026 (per e-mail bevestigd)
+- Loonstroken staan op de laatste werkdag van de periode in het klantportaal`,
+    },
+    {
+      id: "havenstaal-calendar-2027",
+      clientId: "havenstaal",
+      title: "Havenstaal BV – loonkalender 2027",
+      kind: "sheet",
+      ownerId: "emma",
+      collaboratorIds: [],
+      readerIds: ["lars"],
+      location: "Netherlands",
+      status: "WIP",
+      teamId: "pay-nl",
+      tags: ["client", "deadlines", "holiday-pay", "reference"],
+      createdAt: ago(8),
+      updatedAt: ago(1),
+      lastEditedById: "emma",
+      verifications: [],
+      views: views(["lars"], 5),
+      content: `# Havenstaal BV – loonkalender 2027
+
+| Periode | Aanlevering | Uitbetaling | Opmerking |
+|---|---|---|---|
+| 1 | 19 jan | 28 jan | |
+| 2 | 16 feb | 25 feb | |
+| 5 | 11 mei | 20 mei | 50% vakantiegeld |
+| 13 | 14 dec | 23 dec | 50% vakantiegeld |`,
+    },
+    {
       id: "expense-faq",
       title: "Expense claims – FAQ",
       kind: "doc",
@@ -948,7 +1243,7 @@ TT-300 terminals must be replaced; customers were informed in March 2026.`,
       location: "Global",
       status: "Completed",
       teamId: "hr-ops",
-      tags: ["expenses", "travel", "faq"],
+      tags: ["expenses", "travel", "guide"],
       createdAt: ago(200),
       updatedAt: ago(45),
       lastEditedById: "inge",
@@ -1024,7 +1319,7 @@ Team lead: An Claes – escalations and holiday cover.`,
       location: "France",
       status: "Completed",
       teamId: "pay-fr",
-      tags: ["benefits", "faq"],
+      tags: ["benefits", "guide"],
       createdAt: ago(120),
       updatedAt: ago(60),
       lastEditedById: "lea",
@@ -1040,8 +1335,70 @@ Team lead: An Claes – escalations and holiday cover.`,
     },
   ];
 
-  return { teams, people, docs, overrides: [] };
+  // A conflict that was overridden on purpose, so the handover briefing has a known exception to show.
+  const overrides: ConflictOverride[] = [
+    {
+      id: 0,
+      docId: "client-noordkaai",
+      personId: "pieter",
+      at: ago(765),
+      reason: "Noordkaai has its own company collective agreement with a higher mileage rate. €0.45/km is correct for them – don't align it with the general policy.",
+      probability: 0.91,
+      lineNo: 9,
+      lineText: "Mileage allowance: €0.45/km (own company collective agreement, clause 4.2)",
+      existingDocId: "expense-policy",
+      existingTitle: "Travel & expense policy",
+      existingLineNo: 3,
+      existingLineText: "Mileage allowance: €0.3707/km",
+    },
+  ];
+
+  const clients: Client[] = [
+    { id: "noordkaai", name: "Noordkaai Logistics", domain: "noordkaai.example", teamId: "pay-be", location: "Belgium" },
+    { id: "havenstaal", name: "Havenstaal BV", domain: "havenstaal.example", teamId: "pay-nl", location: "Netherlands" },
+    { id: "delinde", name: "Brouwerij De Linde", domain: "delinde.example", teamId: "pay-be", location: "Belgium" },
+    { id: "sintanna", name: "Zorggroep Sint-Anna", domain: "sintanna.example", teamId: "pay-be", location: "Belgium" },
+    { id: "vandam", name: "Bakkerij Van Dam BV", domain: "vandam.example", teamId: "pay-nl", location: "Netherlands" },
+    { id: "morel", name: "Transports Morel SAS", domain: "morel.example", teamId: "pay-fr", location: "France" },
+    { id: "lumiere", name: "Atelier Lumière SARL", domain: "lumiere.example", teamId: "pay-fr", location: "France" },
+    { id: "mueller", name: "Müller Maschinenbau GmbH", domain: "mueller-maschinenbau.example", teamId: "pay-de", location: "Germany" },
+  ];
+
+  const folders: Folder[] = SEED_FOLDERS.map(({ docs: _docs, ...f }) => ({ ...f, createdById: "an", createdAt: ago(900) }));
+  const folderOf = new Map(SEED_FOLDERS.flatMap((f) => f.docs.map((docId) => [docId, f.id] as const)));
+  const docs: Doc[] = seedDocs.map(({ location, audienceTeamIds, ...d }) => ({ ...d, locations: [location], audienceTeamIds: audienceTeamIds ?? [], folderId: folderOf.get(d.id) }));
+
+  return { teams, people, docs, overrides, clients, folders, terms: DEFAULT_TERMS };
 }
+
+/**
+ * The example folder structure: by function, then by country or client. Parents come before their
+ * subfolders. Documents not listed stay at the top of the drive.
+ */
+export const SEED_FOLDERS: { id: string; name: string; parentId?: string; docs: string[] }[] = [
+  { id: "f-payroll", name: "Payroll", docs: ["holiday-pay-faq"] },
+  {
+    id: "f-payroll-be",
+    name: "Belgium",
+    parentId: "f-payroll",
+    docs: ["dmfa-checklist", "salary-register-be", "input-deadlines", "indexation-pc200-2027", "payroll-calendar-2027-be", "onboarding-consultant-be", "team-contacts-be"],
+  },
+  { id: "f-payroll-be-yearend", name: "Year-end closing", parentId: "f-payroll-be", docs: ["be-yearend-2026", "be-yearend-2023", "yearend-bonus-parttime"] },
+  { id: "f-payroll-be-policies", name: "Policies", parentId: "f-payroll-be", docs: ["overtime-be", "sick-leave-be"] },
+  { id: "f-payroll-nl", name: "Netherlands", parentId: "f-payroll", docs: ["overtime-nl", "vakantiegeld-nl-2026", "company-car-nl"] },
+  { id: "f-payroll-fr", name: "France", parentId: "f-payroll", docs: ["mutuelle-fr", "mutuelle-faq-fr", "cloture-paie-fr", "dsn-calendar-fr-2026", "teletravail-fr"] },
+  { id: "f-payroll-de", name: "Germany", parentId: "f-payroll", docs: ["lohnabrechnung-checkliste-de", "entgeltfortzahlung-de", "minijob-de-2026"] },
+  { id: "f-clients", name: "Clients", docs: ["client-handover", "escalation-playbook"] },
+  { id: "f-clients-noordkaai", name: "Noordkaai Logistics", parentId: "f-clients", docs: ["client-noordkaai", "noordkaai-agreement", "noordkaai-calendar-2027", "noordkaai-onboarding-2022"] },
+  { id: "f-clients-havenstaal", name: "Havenstaal BV", parentId: "f-clients", docs: ["client-havenstaal", "havenstaal-afspraken", "havenstaal-calendar-2027"] },
+  { id: "f-clients-delinde", name: "Brouwerij De Linde", parentId: "f-clients", docs: ["client-delinde"] },
+  { id: "f-clients-morel", name: "Transports Morel SAS", parentId: "f-clients", docs: ["client-morel"] },
+  { id: "f-clients-mueller", name: "Müller Maschinenbau GmbH", parentId: "f-clients", docs: ["client-mueller"] },
+  { id: "f-hr", name: "HR policies", docs: ["remote-work", "expense-policy", "expense-policy-draft", "expense-faq"] },
+  { id: "f-legal", name: "Legal & compliance", docs: ["gdpr-retention", "sar-procedure", "company-car-be"] },
+  { id: "f-time", name: "Time & attendance", docs: ["absence-codes"] },
+  { id: "f-time-terminals", name: "Clocking terminals", parentId: "f-time", docs: ["clocking-terminals", "clocking-cs-copy", "terminal-models", "clocking-setup-2019"] },
+];
 
 /**
  * Plausible edit history for a seeded document, so "who wrote what" has something to work with:
@@ -1064,4 +1421,114 @@ export function seedHistory(doc: Doc): { personId: string | null; at: string; co
     at: new Date(start + ((end - start) * i) / Math.max(steps.length - 1, 1)).toISOString(),
     content: lines.slice(0, Math.ceil(lines.length * step.share)).join("\n"),
   }));
+}
+
+/**
+ * The demo mailbox and Teams workspace: client conversations where knowledge lives that never made it
+ * into a document. Message ids are assigned by the database.
+ */
+export function buildConversations(now = Date.now()): (Omit<Conversation, "messages"> & { messages: Omit<Conversation["messages"][number], "id">[] })[] {
+  // Everyone who wrote is on the thread; `to` adds recipients who haven't answered (yet).
+  const withParticipants = (cs: (Omit<Conversation, "messages" | "participants"> & { messages: Omit<Conversation["messages"][number], "id">[]; to?: Participant[] })[]) =>
+    cs.map(({ to = [], ...c }) => {
+      const seen = new Map<string, Participant>();
+      for (const p of [...c.messages.map((m) => ({ personId: m.personId, name: m.authorName, email: m.authorEmail })), ...to]) seen.set(p.email ?? p.name, p);
+      return { ...c, participants: [...seen.values()] };
+    });
+  const ago = (days: number, hours = 0) => new Date(now - days * DAY - hours * HOUR).toISOString();
+  const els = { authorName: "Els Vermeiren", authorEmail: "els.vermeiren@noordkaai.example" };
+  const bart = { authorName: "Bart Mertens", authorEmail: "bart.mertens@noordkaai.example" };
+  const pieter = { personId: "pieter", authorName: "Pieter Wouters", authorEmail: "pieter.wouters@trustdrive.example" };
+  const sofie = { personId: "sofie", authorName: "Sofie Willems", authorEmail: "sofie.willems@trustdrive.example" };
+  const marloes = { authorName: "Marloes Vink", authorEmail: "marloes.vink@havenstaal.example" };
+  const lars = { personId: "lars", authorName: "Lars de Jong", authorEmail: "lars.de.jong@trustdrive.example" };
+
+  return withParticipants([
+    {
+      id: "conv-noordkaai-july",
+      source: "email",
+      title: "Extra payroll run in July",
+      clientId: "noordkaai",
+      createdAt: ago(900),
+      messages: [
+        { ...els, sentAt: ago(900), body: "Hi Pieter,\n\nAs every year we pay the summer bonus in July. Could you plan an extra payroll run for it?\n\nThanks,\nEls" },
+        { ...pieter, sentAt: ago(899, 20), body: "Hi Els,\n\nAgreed: an extra payroll run on 15 July every year for the summer bonus. Please send the bonus input by 8 July at the latest.\n\nBest regards,\nPieter" },
+        { ...els, sentAt: ago(899, 18), body: "Perfect, thank you!" },
+      ],
+    },
+    {
+      id: "conv-noordkaai-mileage",
+      source: "email",
+      title: "Mileage rate for our drivers",
+      clientId: "noordkaai",
+      createdAt: ago(780),
+      messages: [
+        {
+          ...els,
+          sentAt: ago(780),
+          body: "Hello Pieter,\n\nOur company collective agreement (clause 4.2) gives our drivers a mileage allowance of €0.45/km. Can you make sure payroll keeps applying that rate, also when the general policy changes?\n\nKind regards,\nEls Vermeiren\nHR Manager, Noordkaai Logistics",
+        },
+        { ...pieter, sentAt: ago(778), body: "Hi Els,\n\nConfirmed: we keep €0.45/km for Noordkaai drivers, whatever the general travel policy says. I've noted it as an exception in your client file.\n\nBest regards,\nPieter" },
+      ],
+    },
+    {
+      id: "conv-noordkaai-teams",
+      source: "teams",
+      title: "Pieter Wouters, Sofie Willems",
+      clientId: "noordkaai",
+      createdAt: ago(760),
+      messages: [
+        { ...pieter, sentAt: ago(760, 5), body: "Heads-up on Noordkaai before I leave: drivers' overtime is paid out every month, never recovered as time off. It's in their collective agreement, so don't change it." },
+        { ...sofie, sentAt: ago(760, 4), body: "Good to know, thanks! Who do I contact there when Els is away?" },
+        { ...pieter, sentAt: ago(760, 4), body: "Bart Mertens, their payroll administrator (bart.mertens@noordkaai.example). Els prefers a phone call for anything urgent." },
+        { ...pieter, sentAt: ago(760, 3), body: "Also: I promised Els a simulation of the 2027 indexation for their budget. Can you pick that up?" },
+        { ...sofie, sentAt: ago(760, 3), body: "Will do 👍" },
+      ],
+    },
+    {
+      id: "conv-noordkaai-correction",
+      source: "email",
+      title: "Correction for driver K. Janssens",
+      clientId: "noordkaai",
+      createdAt: ago(30),
+      messages: [
+        {
+          ...bart,
+          sentAt: ago(30),
+          body: "Hello,\n\nKevin Janssens (national register number 85.07.30-033.61) received a wrong amount in September. Please pay the difference of €212.40 to BE71 0961 2345 6769.\n\nRegards,\nBart Mertens\nPayroll administrator",
+        },
+        { ...sofie, sentAt: ago(29), body: "Hi Bart, thanks – we'll include the correction of €212.40 in the October payroll run." },
+      ],
+    },
+    {
+      id: "conv-noordkaai-indexation",
+      source: "email",
+      title: "2027 indexation simulation",
+      clientId: "noordkaai",
+      createdAt: ago(12),
+      to: [{ personId: sofie.personId, name: sofie.authorName, email: sofie.authorEmail }],
+      messages: [
+        {
+          ...els,
+          sentAt: ago(12),
+          body: "Hi Sofie,\n\nPieter promised us a simulation of the 2027 indexation for our 140 employees. Could you send it before 15 December? We need it for the budget.\n\nKind regards,\nEls",
+        },
+      ],
+    },
+    {
+      id: "conv-havenstaal-vakantiegeld",
+      source: "email",
+      title: "Uitbetaling vakantiegeld",
+      clientId: "havenstaal",
+      createdAt: ago(200),
+      messages: [
+        {
+          ...marloes,
+          sentAt: ago(200),
+          body: "Beste Lars,\n\nZoals besproken betalen wij het vakantiegeld in twee delen uit: 50% in mei en 50% in december. Kunnen jullie dat zo inplannen?\n\nMet vriendelijke groeten,\nMarloes Vink",
+        },
+        { ...lars, sentAt: ago(199), body: "Hoi Marloes,\n\nAfgesproken: vakantiegeld 50% in mei en 50% in december, vanaf 2026.\n\nGroet,\nLars" },
+      ],
+    },
+  ]);
 }

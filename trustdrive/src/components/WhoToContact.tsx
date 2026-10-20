@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { useApp } from "./AppContext";
+import { useCompose } from "./Compose";
 import { Avatar } from "./TopBar";
 import type { Contact, FormerContributor } from "@/lib/contacts";
 import { timeAgo } from "@/lib/time";
+import type { Person } from "@/lib/types";
 
 /** Ranked people to ask about this document, with the reasons behind each ranking. */
-export function WhoToContact({ contacts, former }: { contacts: Contact[]; former: FormerContributor[] }) {
+export function WhoToContact({ docTitle, contacts, former }: { docTitle: string; contacts: Contact[]; former: FormerContributor[] }) {
   const { person, teamName } = useApp();
   const [open, setOpen] = useState<string | null>(null);
 
@@ -47,6 +49,7 @@ export function WhoToContact({ contacts, former }: { contacts: Contact[]; former
                   {c.caveat && <div className="mt-1 text-[11px] text-[#b06000]">{c.caveat}</div>}
                 </div>
               </button>
+              {p && <ContactLinks person={p} subject={`Question about “${docTitle}”`} />}
             </li>
           );
         })}
@@ -63,5 +66,23 @@ export function WhoToContact({ contacts, former }: { contacts: Contact[]; former
         </div>
       )}
     </section>
+  );
+}
+
+/** Email and Teams chat (written inside TrustDrive) and a phone link; by default indented to line up with a contact's name. */
+export function ContactLinks({ person, subject, className = "mb-1 pl-11" }: { person: Person; subject: string; className?: string }) {
+  const compose = useCompose();
+  const to = [{ personId: person.id, name: person.name, email: person.email }];
+  const link = "text-blue-700 hover:underline";
+  return (
+    <div className={`flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${className}`}>
+      {person.active && (
+        <>
+          <button onClick={() => compose({ source: "email", to, subject })} title={person.email} className={link}>Email</button>
+          <button onClick={() => compose({ source: "teams", to })} title={`Chat with ${person.name}`} className={link}>Teams chat</button>
+        </>
+      )}
+      {person.phone && <a href={`tel:${person.phone.replace(/\s+/g, "")}`} title={`Call ${person.name}`} className={link}>{person.phone}</a>}
+    </div>
   );
 }

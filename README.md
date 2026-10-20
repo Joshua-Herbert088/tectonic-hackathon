@@ -10,6 +10,9 @@ The scoring and checking is done by **[Jev](https://jevtypesafeai.com)**, TypeSa
 
 ## What it does
 
+### For you
+The home page lists what needs the person viewing it: documents they own or work on that score below 75 for them or weren't verified in 180 days, client conversations where the client asked something and is still waiting, documents without an owner where they're a suggested successor, and their team's least trusted documents. The same navigation is on every page, and when Jev can't be reached a single banner explains that scores and checks are rule-based estimates.
+
 ### Trust score on every document
 - Every file in the drive list shows a 0–100 score ring: **Trusted** (≥ 75), **Use with care** (50–74) or **Unreliable** (< 50).
 - The score depends on who is reading, so it's calculated per document *and* per viewer. A French policy scores high for a colleague in France and low for someone in Belgium.
@@ -39,16 +42,27 @@ Every upload and every text edit is checked against **all** existing documents (
 3. Jev gets one yes/no question per pair: do these two statements contradict each other?
    - **≥ 0.75** is a hard conflict and blocks the save.
    - **0.40–0.75** is shown as a possible conflict but doesn't block.
+4. **Without Jev**, fixed rules decide instead (`ruleProbability` in `src/lib/conflicts.ts`). A pair is a hard conflict only when both lines are clearly about the same thing (the same person or client, or nearly all subject words shared) in the same country, year and month, and the values that answer it differ. In a table row, the matching column is compared, so "12 décembre" is checked against *Input deadline: 10 Dec* rather than *Payroll run: 15 Dec*. Drafts, changes "from" a date, a country rule next to a global one, and lines tied to a topic the other side doesn't mention are at most *possible*. The dialog says when the rules decided.
 
 When a save is blocked, a dialog shows your line next to the conflicting line. You can:
 - **fix your own line**,
 - **fix the existing document** in place, or
 - **override with a reason**. The override is stored permanently on both documents (`conflict_overrides` table) and fed into the trust score.
 
+### Confidential documents
+Uploading has a **Contains confidential information** switch, which can also be changed later in a document's Details tab. A confidential document is marked with a red *Confidential* badge wherever it's listed, and its content is **never sent to Jev**:
+- its trust score is the rule-based estimate (labelled as such),
+- conflict and duplicate checks decide every pair that involves it with the rules, in both directions: when it's saved, and when another document is compared with it,
+- tag suggestions for it come from the keyword rules,
+- other documents' trust inputs leave out its excerpt and its lines in conflict overrides.
+
+`src/lib/confidential.test.ts` checks this against a stand-in for Jev.
+
 ### Duplicate warnings
 - **When adding a file:** if an upload (or a blank document being filled for the first time) basically repeats an existing document, you get a warning: "This file is very similar… consider editing the existing one". You can continue anyway.
 - **When reading:** if you open a document with basically the same information as one you opened in the last hour, a blue info banner says so.
 - Both use a quick feature comparison to pick up to 3 candidates, then a Jev *Score* for how much information the documents share, ignoring wording and language. The cutoff is 2.75 on a 0–4 scale (`src/lib/similarity.ts`).
+- Without Jev, `ruleOverlap` estimates that score from the numbers, concepts and names the texts share, which works across languages (a translation shares them), or from all features for near-copies.
 
 ### Who to contact
 Each document ranks up to 5 active colleagues, with the reasons shown (`src/lib/contacts.ts`):
@@ -71,6 +85,93 @@ The bell in the top bar notifies people when their information changes (`src/lib
 ### Handover radar
 A drive view that lists documents that need a new owner: no owner, the owner left, or the owner moved team. They're sorted by exposure, meaning how many people rely on the document and how untrustworthy it is. Each one comes with suggested successors, and you can reassign ownership in one click (`src/lib/handover.ts`, `src/components/HandoverRadar.tsx`).
 
+### Handover briefing
+When you take over from someone who left or moved team, `/handover/<person>` gives you one page with everything you inherit from them (`src/lib/briefing.ts`, `src/app/handover/[personId]/page.tsx`):
+- **Documents you inherit:** everything they owned, wrote, edited or verified, grouped by your trust score into *safe to use*, *use with care* and *don't rely on these yet*, with the reasons.
+- **Known exceptions:** conflict overrides on those documents, showing both lines and the written reason. If the person who overrode the conflict has left, the briefing warns that this note is the only record of why the line is different.
+- **What they knew:** lines with figures they wrote that are still in the current text (from the line-level blame), documents only they ever verified, and documents they owned.
+- **Who to ask:** the predecessor if they're still at the company, then the active colleagues who own, verified or worked on the same documents, with email, Teams and phone links.
+- **First actions:** take over or reassign ownership, and verify documents only they checked, each in one click.
+
+Open it from the chips at the top of the Handover radar, or from the "Handover needed" box on a document.
+
+### Client overview
+Taking over a client, or preparing a meeting with one? `/client/<id>` (the client names in the sidebar, the client card on **Company & tags**, or **Client overview** in the drive's client filter) puts everything on one page (`clientOverview` in `src/lib/service.ts`, `src/app/client/[id]/page.tsx`):
+- **About the client:** documents linked to it, grouped by your trust score into *safe to use*, *use with care* and *don't rely on these yet*.
+- **What the conversations say:** the handover draft's analysis of all the client's mail and Teams chats, read-only: what's still open, agreements and facts that aren't written down anywhere, and what's already in the drive. Every line links to its message.
+- **Known exceptions:** conflict overrides on the client's documents, with the reason.
+- **Also applies:** general documents for the client's country (or global) on the same topics, the ones an exception differs from first.
+- **Colleagues who know this client**, from the conversations, ownership and verifications (former colleagues flagged), and **contacts at the client** from the email signatures.
+
+### Client handover documents from email and Teams
+Agreements made by email and promises made in a Teams chat often never reach a document. **Conversations** (in the drive sidebar) shows the client mail threads and Teams chats. You can import more, select one or more of them, and get a draft handover document for that client (`src/lib/handoverDraft.ts`, `src/app/conversations/`):
+- **Every line is quoted from a message and links to it.** The letter after each line opens the conversation scrolled to that message, with the quoted sentence highlighted; hovering shows who said it, where and when. Nothing is invented and anyone can check it. Link addresses are ignored by the conflict, duplicate, tagging and outdated-year checks.
+- **Sorted into sections:** agreements with the client, client setup, open items and contacts. Jev classifies each statement with a *choice* question, or keyword rules in four languages when Jev is unavailable. You can move items between sections or untick them before saving.
+- **Open loops:** Jev checks for each question, request or promise whether it's still open, given the later messages in the same conversation. Questions asking for information count as answered by any reply.
+- **"Not written down anywhere":** each agreement and fact is checked against the drive using the conflict rules' fact match, so the review shows what's already documented and what only lives in the chats.
+- **Personal data:** IBANs and national numbers are removed before anything is sent to Jev, and lines with an employee's personal data or health information are left out unless someone ticks them.
+- **Contacts at the client** come from the senders and their email signatures.
+- **Saved through the usual check:** the draft is saved as *To be reviewed*, linked to the client, through the same conflict and duplicate check as any upload.
+
+**Import** accepts pasted email chains (reply headers in English, Dutch, French or German, Outlook or Gmail style), Teams chats (copied from the app or exported), and `.eml` files (`src/lib/conversationImport.ts`). Colleagues are recognised by name or address, and the client by the senders' email domain.
+
+The handover briefing lists the conversations the predecessor took part in, with a **Create handover document** button for each client. Documents can also be filtered by client in the drive sidebar.
+
+### Email and Teams inside TrustDrive
+Colleagues can write each other email and Teams messages without leaving the app (`src/lib/messaging.ts`, `src/components/Compose.tsx`). Nothing goes through Microsoft 365.
+- **Email** and **Teams chat** next to every contact open a compose window. The home page's **Reply** answers in that thread, and each conversation has a reply box. **New → Email / Teams chat** on the Conversations page starts a new one.
+- Messages are stored in their conversation, and the colleagues on it get a bell notification. Switch **Viewing as** to answer as someone else. A Teams message to the same people continues the existing chat.
+- **Client contacts don't receive anything yet**, because email outside the company isn't connected. The compose window and the confirmation say so; the message is kept in the conversation.
+- Replying to a client takes them off **Clients waiting for an answer**. Sent messages feed into client handover documents like any other conversation.
+
+### Folders
+The drive has nested folders (`src/lib/folders.ts`, `src/app/drive/page.tsx`). The demo company comes with an example structure: *Payroll* (per country, with *Year-end closing* and *Policies* under Belgium), *Clients* (a folder per client), *HR policies*, *Legal & compliance* and *Time & attendance* (with *Clocking terminals*).
+- **Browse** with the path at the top. Each folder row shows how many documents it holds and how many of them are unreliable for you.
+- **New folder** creates one in the folder you're in, and **New → Blank document / File upload** adds the document there too. The ⋮ menu on a folder renames or deletes it. Deleting a folder moves its documents and subfolders up a level, so no document is deleted.
+- **Trash:** the ⋮ menu on a document (or right-click) has **Move to trash**, for its owner and collaborators, with an **Undo** notice. The **Trash** tab lists the documents you own or removed: **Restore** puts one back where it was, **Delete forever** removes it with its history and scores. Documents in the trash are left out of everything else: the drive, search, scores, conflict and duplicate checks.
+- **Move** documents and folders by dragging them onto a folder or onto the path at the top, or pick a folder in a document's **Details** tab. Moving a document isn't an edit: it doesn't change its history or its trust score.
+- **Search and filters** cover the current folder and its subfolders, and each result shows the folder it's in. The other views (Owned by me, Needs attention, a client) list documents from every folder.
+
+### Finding documents: tags and the company map
+Every document is tagged with four things (`src/lib/taxonomy.ts`, `src/lib/appliesTo.ts`):
+
+| Field | What it holds |
+|---|---|
+| **Document type** | One of policy, procedure, checklist, reference, guide (which now includes Q&A) and informal (notes, tips, know-how) |
+| **Topics** | One or more topics in two levels (e.g. *Compensation & benefits › Salary*) |
+| **Applies to** | One or more countries, or Global, and optionally teams within them. Only the teams based in the chosen countries (or working across countries) can be picked; no team means every team there |
+| **Client** | Optional; picked by searching the clients |
+
+The team that maintains a document isn't a tag: it's the team of whoever created it.
+- **Company & tags** (sidebar) shows what exists: countries → teams → people, clients, the topic tree with descriptions, and document types, each with a document count that opens the filtered drive. It also lists tags in use that aren't in the taxonomy, and documents that still lack a type or topic.
+  - **My clients:** everyone chooses which clients they work with (**Choose** next to *My clients* in the sidebar, or **In my sidebar** on a client card). Only those show in their sidebar and in *Clients waiting for an answer*; until someone chooses, they see their team's clients.
+  - **Clients** are added, edited and removed there (name, email domain, team, country). A client that documents or conversations still refer to can't be removed (`src/lib/clients.ts`, `src/app/api/clients/`).
+  - The **Edit tags** tab is where the taxonomy is changed: add, rename, describe and remove topics, document types and countries, edit their keywords, and move a sub-topic to another main topic or make it a main topic. Ids never change, so documents keep their tags.
+- **The taxonomy is editable.** Topics, document types and countries are stored in the database (`taxonomy_terms`), starting from the defaults in `src/lib/taxonomy.ts`. On **Company & tags**, anyone can add a country, a main topic, a sub-topic or a document type, and edit its name, description and keywords. The keywords drive the rule-based suggestions and are given to Jev as evidence, so a new country like Luxembourg is suggested from words such as *CCSS*. Ids never change, so renaming a topic keeps every document's tags. A country can't be renamed (documents and people store its name) or removed while anything uses it. A topic with sub-topics can't be removed either. Removing a tag that documents use leaves it on them as an untracked tag until they're retagged.
+- **Tagging is mandatory.** A document needs a document type, at least one topic and at least one country before its content is saved. **Upload** always ends in the **Tag this document** dialog. The first **Save** of a new blank document, and **Check & create document** for a client handover, open it when something is missing. **Edit tags** in a document's Details tab opens the same dialog. It's pre-filled with suggestions from the content. The server refuses untagged content and unknown countries too. Demo documents that were never fully tagged are asked for their tags on their next save.
+- **Suggested tags.** **Suggest from content** in the upload dialog and **Suggest tags** in a document's Details tab propose country, team, client, document type and topics (`src/lib/tagging.ts`). Jev answers typed *choice* questions in one call per document, walking the topic tree level by level (a sub-topic's confidence is P(main topic) × P(sub-topic)). A suggested topic is kept only if the text contains supporting words, unless Jev is very sure, which filters out unsupported tags. Without Jev, keyword rules in four languages decide. Country, team and client are only proposed when the suggestion is confident, so "nothing found" never overwrites a known value. Nothing changes until someone applies it.
+- The drive filters by tag (a main topic includes its sub-topics), team, country, client and status, all linkable (`/drive?tag=salary`).
+
+This is the *Find* part of the challenge, in the spirit of McKinsey's automated knowledge tagging ([MIT Sloan poster](https://mitsloan.mit.edu/sites/default/files/inline-files/McKinsey_Vojta_Machytka_Samantha_Tsang%20Vojta%20Machytka.pdf)): they reported 46% consistency over repeated GPT runs and $0.35 per document. Here a suggestion costs one Jev call (about a tenth of a cent), and the rules give the same answer every time.
+
+### Evaluation
+Measured on the 39 demo documents' hand-written country, team, client and tags (`src/lib/tagEval.ts`), with Jev run five times per document:
+
+| Tag suggestions | Jev | Rules |
+|---|---|---|
+| Country | 87.2% | 84.6% |
+| Team | 79.5% | 71.8% |
+| Client | 100% | 100% |
+| Document type (22 labelled) | 90.9% | 77.3% |
+| Topic precision | 88.5% | 78.6% |
+| Topic recall | 70.0% | 80.0% |
+| At least one correct topic | 97.4% | 97.4% |
+| Same answer in 5 runs | 92.3% | 100% |
+
+Jev is more precise and better on country, team and document type; the rules find more topics (higher recall). Jev gets the country words the rules recognise (e.g. *DmfA* and joint committees are Belgian) as evidence; without them it put the Belgian DmfA checklist in France. For conflicts, Jev matches 16 of the 17 labelled pairs (it blocks a draft proposal against a current rule) and gives the same verdict in all five runs on 15 of 17.
+
+For comparison, the [McKinsey/MIT poster](https://mitsloan.mit.edu/sites/default/files/inline-files/McKinsey_Vojta_Machytka_Samantha_Tsang%20Vojta%20Machytka.pdf) reports 46% consistency and $0.35 per document for GPT-4o tagging on a different and larger taxonomy, so the numbers aren't directly comparable. The rule keywords were written knowing these documents, so the rules' scores are optimistic; Jev wasn't tuned on them beyond the country evidence. Re-run with `JEV_EVAL=1 npm test -- tagging.jev` and `JEV_EVAL=1 npm test -- conflicts.jev` (paid API, well under a dollar together).
+
 ### Doubts in the text
 Lines that look doubtful are underlined in the document itself: lines that only mention past years, lines involved in an overridden conflict, and lines that Jev finds contradicting other documents (checked in the background when the page opens). See `src/lib/doubts.ts`.
 
@@ -78,53 +179,74 @@ Lines that look doubtful are underlined in the document itself: lines that only 
 
 ## How to run it
 
-**Requirements:** Node.js 20+ (developed on Node 26) and a Jev API key (get one at https://jevtypesafeai.com/pricing).
+**Requirements:** Node.js 22+ (developed on Node 26). A Jev API key (https://jevtypesafeai.com/pricing) is optional: without one, everything runs on the rule-based fallbacks. Nothing else to install: locally the database is an embedded Postgres (PGlite).
 
 ```bash
 cd trustdrive
 npm install
 
-# Jev credentials (the file is git-ignored)
-cat > .env.local <<'EOF'
-JEV_API_KEY=jv_live_...
-JEV_API_URL=https://jevtypesafeai.com/api/v1/decide
-EOF
+# Settings (the file is git-ignored); at least JEV_API_KEY=jv_live_... for Jev
+cp .env.example .env.local
 
 npm run dev
 # open http://localhost:3000
 ```
 
-On first start, the SQLite database `trustdrive/data/trustdrive.db` is created, the migrations in `trustdrive/drizzle/` run, and a demo company is loaded. That's 8 teams, 24 people (some of whom left or moved team) and 40 documents in English, Dutch, French and German.
+On first start, the embedded Postgres database is created in `trustdrive/data/pglite`, the migrations in `trustdrive/drizzle/` run, and a demo company is loaded. That's 8 teams, 24 people (some of whom left or moved team), 8 clients (Noordkaai Logistics and Havenstaal BV with 6 email and Teams conversations), and 48 documents in English, Dutch, French and German. Set `DATABASE_URL` to use a real Postgres instead.
 
 | Command | What it does |
 |---|---|
 | `npm run dev` | Development server on :3000 |
 | `npm run build` / `npm start` | Production build and server |
-| `npm run lint` | ESLint |
-| `npm run db:generate` | Create a migration after changing `src/db/schema.ts` (it's applied automatically on the next start) |
+| `npm run lint` / `npm run typecheck` | ESLint / TypeScript |
+| `npm run check` | Lint, typecheck and tests together |
+| `npm test` | Tests (vitest), against a throwaway in-memory Postgres and never calling Jev: the conflict rules, duplicate estimate, conversation import and handover drafts, the database layer, and the route wrapper |
+| `JEV_EVAL=1 npm test -- conflicts.jev` | Runs the same labelled pairs through Jev and the rules and prints a comparison (calls the paid API, Node 21+) |
+| `npm run db:generate` | Create a migration after changing `src/db/schema.ts` (applied automatically on the next start) |
+| `npm run db:migrate` | Apply migrations now |
 | `npm run db:studio` | Browse the database in the browser |
 
-- **Reset demo data** (bottom of the drive sidebar) wipes the database and reloads the demo company.
+- **Reset demo data** (bottom of the sidebar) wipes the database and reloads the demo company.
+- **No sign-in:** **Viewing as** picks who you are. The choice is kept in a cookie and the server decides who's asking: requests can't claim to be someone else.
+- **No network for Jev?** Add `JEV_DISABLED=1` to `.env.local`. Trust scores, conflict checks, duplicate warnings and doubts then all run on the rule-based fallbacks; the UI labels each result as rule-based. Without the flag, the same fallbacks kick in automatically whenever Jev can't be reached.
 - Demo documents added to `src/lib/seed.ts` later are inserted into existing databases automatically on startup.
 - Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time a user opens the drive, all visible documents are scored, which takes a few seconds.
 
 ### Suggested demo
-1. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. Sort the drive by trust score and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
+1. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
 2. Open *Overtime policy – Belgium*. Switch to Marc (the owner), click **I confirm this document is correct**, and watch it rescore.
 3. **New → File upload** `trustdrive/samples/salary-review-jonas-maes.md`. It's blocked because it conflicts with the salary register. Override it with a reason, then switch to An Claes and open the bell.
 4. Upload `samples/multilingual/planning-paie-decembre-fr.md` (French, conflicts with an English deadline sheet) and `samples/multilingual/maladie-salaire-garanti-fr.md` (a French translation of an existing document, so you get the duplicate warning).
 5. Open *Clocking terminal troubleshooting guide*, then *Clocking terminals – quick fixes (CS copy)*. You'll see the "you just saw this" banner.
-6. Open **Handover radar** in the sidebar and reassign a document whose owner left.
+6. Open **Handover radar** in the sidebar (or the tab in the drive) and reassign a document whose owner left.
+7. Still as Jonas, click **Pieter Wouters** at the top of the radar to open his handover briefing. *Client file – Noordkaai Logistics* has a known exception: €0.45/km against the policy's €0.3707/km, with Pieter's reason. Take over the client file and verify it from **First actions**.
+8. In Pieter's briefing, under **Conversations Pieter took part in**, click **Create handover document** for Noordkaai Logistics. The review shows his mailed €0.45/km agreement (already in the client file), the 8 July bonus-input deadline (not written down anywhere), and the unanswered 2027 indexation request (still open). The IBAN and national number from the correction mail are kept out. Click **Check & create document**.
+9. As Sofie, click **Reply** next to Els Vermeiren on **For you** and send the simulation; Els disappears from the waiting list. Then send An Claes a **Teams chat** from a document's **People** tab, switch to An, open the bell and answer.
+10. Open **Company & tags**, click the document count of *Compensation & benefits*, then open a document you own, go to **Details** and click **Suggest tags**.
 
 ### Where things are
 
 ```
 trustdrive/
-  src/app/                 pages (drive list, document page) and API routes under api/
+  src/app/                 pages: For you (/), drive (/drive), document, handover briefing, conversations; API routes under api/
+  src/components/AppShell.tsx  navigation, New menu and the Jev-status banner shared by every page
   src/components/          UI: trust badge, conflict/duplicate dialogs, upload, who-to-contact, bell, radar
-  src/db/schema.ts         Drizzle schema (SQLite)
+  src/db/schema.ts         Drizzle schema (Postgres)
+  src/lib/config.ts        environment variables, validated
+  src/lib/auth.ts          who's asking: the Viewing as switcher's cookie
+  src/lib/http.ts          route wrapper: input validation, error responses, logging
   src/lib/trust.ts         Jev client, trust-score inputs, good/bad signals, related documents
-  src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no)
+  src/lib/conflicts.ts     conflict detection (fact lines → candidate pairs → Jev yes/no, or the rules without Jev)
+  src/lib/conflict-cases.ts  hand-labelled conflict pairs used by the tests and the Jev eval
+  src/lib/briefing.ts      handover briefing
+  src/app/client/[id]/     client overview (service: clientOverview in src/lib/service.ts)
+  src/lib/taxonomy.ts      default topics, document types and countries (with multilingual keywords), validation, required tags
+  src/lib/tagging.ts       tag suggestions (Jev choice questions, or rules) · tagEval.ts measures them
+  src/lib/companyMap.ts    company structure, clients and tag counts for the Company & tags page
+  src/lib/folders.ts       folder tree helpers (paths, subtrees, move checks, name validation)
+  src/lib/handoverDraft.ts client handover drafts from conversations (statements → kinds → open loops → documented?)
+  src/lib/handoverDoc.ts   the handover document's markdown, shared with the review page
+  src/lib/conversationImport.ts  email chain / Teams chat / .eml parsing
   src/lib/lexicon.ts       multilingual payroll/HR word list used for pairing
   src/lib/similarity.ts    duplicate / "same information" detection
   src/lib/contacts.ts      who-to-contact ranking
@@ -143,16 +265,15 @@ trustdrive/
 ## Unfinished / known limitations
 
 **Not a real product yet**
-- **No login or permissions.** "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team dropdowns are limited to the owner and collaborators.
-- **No real Google Drive integration.** Documents live in the local SQLite database.
+- **No login or permissions.** "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team fields are limited to the owner and collaborators. There's no admin screen: people are added to the `people` table with SQL.
+- **No real Google Drive integration.** Documents live in TrustDrive's own Postgres database.
 - **Uploads are text only** (`.md` / `.txt`). No PDF, Word or spreadsheet parsing; "sheet" and "pdf" are only icons.
-- **Missing drive features:** folders, delete, rename and sharing management.
-- **Local only.** The database is a local SQLite file, so it can't be deployed to serverless hosts like Vercel. Moving to Postgres would be the next step; the Drizzle schema carries over.
-- **No automated tests.** Everything was tested by hand against the API. The two `react-hooks/set-state-in-effect` lint errors in `page.tsx` and `AppContext.tsx` are known and harmless.
+- **Missing drive features:** deleting and renaming documents, and sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.
+- **Few automated tests.** `npm test` covers the conflict rules and the duplicate estimate; the rest was tested by hand against the API. On the 17 labelled conflict pairs (`src/lib/conflict-cases.ts`), Jev matched the label on 16 (it blocked a draft proposal against a current rule) and the rules on 17, but the rules were tuned on those same pairs, so that's not an independent measurement.
 
 **Trust score**
 - **Opening a document isn't recorded as a view.** Views are one of Jev's inputs, so recording them would force a rescore on every open. Usage numbers come from the demo data only.
-- **Scores are calculated on demand** the first time a viewer sees a document. There's no background pre-scoring. If Jev is down, the score shows an error.
+- **Scores are calculated on demand** the first time a viewer sees a document. There's no background pre-scoring. If Jev is down, a rule-based estimate on the same rubric is shown instead (dashed ring, not stored), and Jev is skipped for 30 s so pages don't hang.
 - **The rubric and cutoffs** (75/50 bands, 6 levels) were tuned by eye on the demo data, not validated.
 
 **Conflict detection**
@@ -160,13 +281,22 @@ trustdrive/
 - **The multilingual word list only covers payroll/HR vocabulary.** Other subjects rely on the fallback (a shared name plus the same kind of value).
 - **At most 60 line pairs per check.** A very large upload could miss some pairs.
 - **Edits only check new or changed lines.** Contradictions already sitting between existing documents only surface in the "doubts" panel when a document is opened; there's no organisation-wide scan.
-- **Saving is blocked if Jev is unreachable** during a text edit. It returns a 502; there's no offline override.
+- **The rule-based fallback is narrower than Jev.** It only compares values (numbers, dates, codes like P1) and needs a shared name or several shared subject words, so paraphrased subjects and every wording contradiction are left to Jev. Rule results aren't cached, so Jev decides again as soon as it's back.
 
 **Duplicates, contacts, notifications**
 - **The duplicate check compares only the top 3 candidates.** The "you just saw this" history is kept in the browser, per user and per device.
-- **The who-to-contact weights are hand-picked**, and there's no contact action (email or Teams link).
+- **The who-to-contact weights are hand-picked.** Each contact has email, Teams chat and phone links; the demo addresses use the reserved `.example` domain and the phone numbers are made up.
 - **Notifications are in-app only** (the bell checks every 10 s). No email or push, and no notification when ownership is transferred.
 - **The edit history of the demo documents is made up** (owner writes about 60%, then collaborators, then the last editor), so "who wrote which line" works from the start.
 
+**Messaging**
+- **Email and Teams work between colleagues only, inside TrustDrive.** Nothing is sent through Microsoft 365, so client contacts don't receive messages, and there are no attachments, read receipts or per-message recipients (a thread has one participant list). New messages show up within a few seconds (the Conversations page and the bell poll); there's no push.
+
+**Client handover from conversations**
+- **No live Microsoft 365 connection.** The mailbox and Teams chats are demo data plus whatever you import. A real connection needs an Azure app registration with admin consent for Microsoft Graph (Mail.Read, Chat.Read). The import functions are where that would plug in.
+- **Sorting statements isn't perfect.** Jev or the rules can put a sentence in the wrong section, which is why the review step exists. Statements are single sentences, so a fact spread over two sentences is split.
+- **Redaction only covers patterns:** IBANs, Belgian/Dutch/French national numbers, and a list of health words. Names of the client's employees stay.
+- **Open loops are only checked within one conversation.** A promise picked up in another thread isn't seen as resolved.
+
 **Caching**
-- The conflict and similarity caches are in memory and reset when the server restarts. Stored trust scores are kept.
+- The conflict and similarity caches, the "is Jev reachable" status and the deduplication of identical scoring requests are per server instance and reset on restart. Everything else (including stored trust scores) is in Postgres, so any number of instances can run side by side.

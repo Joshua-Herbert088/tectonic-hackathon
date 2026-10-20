@@ -1,5 +1,7 @@
-import { loadHistory } from "./db";
+import { formatLocations } from "./appliesTo";
 import { extractFacts } from "./conflicts";
+import { loadHistory } from "./db";
+import { lineDiff } from "./diff";
 import type { Db, Doc, FactRecord, GovernanceSnapshot, VersionEvent } from "./types";
 
 function inferUnit(text: string) {
@@ -15,9 +17,12 @@ function inferUnit(text: string) {
   return undefined;
 }
 
+/** The fact's value: the number next to a unit (€, %, km) if any, else the first number that isn't a year. */
 function inferValue(text: string) {
-  const match = text.match(/\d+(?:[.,]\d+)?/);
-  return match ? match[0].replace(",", ".") : undefined;
+  const tokens = [...text.matchAll(/\d+(?:[.,\s\u00a0\u202f]\d{3})*(?:[.,]\d+)?/g)].map((m) => ({ v: m[0], start: m.index, end: m.index + m[0].length }));
+  const nextToUnit = (t: (typeof tokens)[number]) => /€\s?$/.test(text.slice(Math.max(0, t.start - 2), t.start)) || /^\s?(?:€|%|km\b)/i.test(text.slice(t.end, t.end + 3));
+  const isYear = (v: string) => /^(?:19|20)\d{2}$/.test(v);
+  return (tokens.find(nextToUnit) ?? tokens.find((t) => !isYear(t.v)) ?? tokens[0])?.v;
 }
 
 function inferDateRange(text: string) {
@@ -27,6 +32,8 @@ function inferDateRange(text: string) {
 }
 
 function inferSubject(doc: Doc, text: string) {
+  // Table rows arrive as "Header: value; Header: value" – the row is named by its first cell.
+  if (text.includes("; ")) return text.split("; ")[0].split(": ").slice(1).join(": ") || doc.title;
   const section = text.split(":")[0]?.trim();
   if (section && /[A-Za-z]/.test(section) && section.length > 2) return section.replace(/^[-*\d.\s]+/, "");
   if (doc.title) return doc.title;
@@ -42,8 +49,8 @@ export function extractFactGraph(doc: Doc): FactRecord[] {
       subject: inferSubject(doc, fact.text),
       value: value ?? fact.text,
       unit: inferUnit(fact.text),
-      country: doc.location,
-      office: doc.location,
+      country: formatLocations(doc.locations),
+      office: formatLocations(doc.locations),
       teamId: doc.teamId,
       validFrom: dates.validFrom,
       validTo: dates.validTo,
@@ -57,20 +64,51 @@ export function extractFactGraph(doc: Doc): FactRecord[] {
   });
 }
 
-export function extractVersionHistory(doc: Doc): VersionEvent[] {
-  const rows = loadHistory([doc.id]).get(doc.id) ?? [];
-  return rows.map((entry) => ({
-    at: entry.at,
-    personId: entry.personId,
-    summary: entry.content.slice(0, 120) || "Version snapshot",
-    contentPreview: entry.content.slice(0, 160) || "No content snapshot available",
-  }));
+const MAX_VERSION_CHANGES = 40;
+
+/** Every saved version, newest first, with what changed compared to the version before it. */
+export async function extractVersionHistory(db: Db, doc: Doc): Promise<VersionEvent[]> {
+  const rows = (await loadHistory([doc.id])).get(doc.id) ?? [];
+  const teamName = (id: string) => db.teams.find((t) => t.id === id)?.name ?? id;
+  return rows
+    .map((entry, i) => {
+      const before = rows[i - 1];
+      const prev = before ? before.content.split("\n") : [];
+      const next = entry.content.split("\n");
+      const changes: VersionEvent["changes"] = [];
+      for (const o of lineDiff(prev, next)) {
+        if (o.op === "delete" && prev[o.a].trim()) changes.push({ kind: "removed", text: prev[o.a] });
+        if (o.op === "insert" && next[o.b].trim()) changes.push({ kind: "added", text: next[o.b] });
+      }
+      const added = changes.filter((c) => c.kind === "added");
+      const removed = changes.length - added.length;
+      const metaChanges = before
+        ? [
+            before.title !== entry.title && `Renamed from “${before.title}”`,
+            before.status !== entry.status && `Status ${before.status} → ${entry.status}`,
+            before.location !== entry.location && `Location ${before.location} → ${entry.location}`,
+            before.teamId !== entry.teamId && `Team ${teamName(before.teamId)} → ${teamName(entry.teamId)}`,
+          ].filter((m): m is string => !!m)
+        : [];
+      const summary = !before ? `Created with ${added.length} lines` : changes.length ? `+${added.length} −${removed} lines` : metaChanges.join(" · ") || "Saved without changes";
+      return {
+        at: entry.at,
+        personId: entry.personId,
+        summary,
+        contentPreview: added[0]?.text.replace(/^[#\s\-*>|]+|[\s|]+$/g, "").replace(/\s*\|\s*/g, " · ").slice(0, 160) ?? "",
+        // The first version is the whole document, so there's nothing to compare it with.
+        changes: before ? changes.slice(0, MAX_VERSION_CHANGES) : [],
+        changeCount: before ? changes.length : 0,
+        metaChanges,
+      };
+    })
+    .reverse();
 }
 
-export function buildGovernanceSnapshot(db: Db, doc: Doc): GovernanceSnapshot {
+export async function buildGovernanceSnapshot(db: Db, doc: Doc): Promise<GovernanceSnapshot> {
   const overridesMade = db.overrides.filter((o) => o.docId === doc.id);
   const overridesAgainst = db.overrides.filter((o) => o.existingDocId === doc.id);
-  const history = extractVersionHistory(doc);
+  const history = await extractVersionHistory(db, doc);
   const factGraph = extractFactGraph(doc);
 
   const governanceScore = Math.max(

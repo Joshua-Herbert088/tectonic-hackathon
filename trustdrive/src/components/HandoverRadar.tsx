@@ -1,5 +1,6 @@
 "use client";
 
+import { formatLocations } from "@/lib/appliesTo";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -34,16 +35,31 @@ export function HandoverRadar({
   const assign = async (doc: Row, ownerId: string) => {
     setBusy(doc.id);
     const before = trustOf(doc)?.score;
-    const res = await fetch(`/api/docs/${doc.id}/owner`, { method: "POST", body: JSON.stringify({ viewerId, ownerId }) });
+    const res = await fetch(`/api/docs/${doc.id}/owner`, { method: "POST", body: JSON.stringify({ ownerId }) });
     if (!res.ok) return setBusy(null);
     router.push(`/doc/${doc.id}${before !== undefined ? `?from=${before}` : ""}`);
   };
+
+  // Former owners (left or moved team), with how many of the listed documents they leave behind.
+  const predecessors = [...rows.reduce((m, { doc }) => (doc.ownerId ? m.set(doc.ownerId, (m.get(doc.ownerId) ?? 0) + 1) : m), new Map<string, number>())];
 
   return (
     <>
       <p className="px-2 pb-3 text-sm text-slate-600">
         Documents that lost their owner, ranked by how many colleagues still rely on them and how little they can be trusted. Hand each one to someone who knows it.
       </p>
+      {predecessors.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 px-2 pb-3 text-sm">
+          <span className="text-slate-600">Handover briefings:</span>
+          {predecessors.map(([id, n]) => (
+            <Link key={id} href={`/handover/${id}`} className="flex items-center gap-1.5 rounded-full bg-white py-0.5 pl-0.5 pr-3 text-slate-800 ring-1 ring-slate-300 hover:bg-blue-50">
+              <Avatar person={person(id)} size={22} />
+              {person(id)?.name ?? id}
+              <span className="text-xs text-slate-500">· {n} doc{n === 1 ? "" : "s"}</span>
+            </Link>
+          ))}
+        </div>
+      )}
       <table className="w-full min-w-[760px] table-fixed text-sm">
         <thead className="sticky top-0 z-10 bg-white text-left text-slate-600">
           <tr className="border-b border-slate-200">
@@ -76,7 +92,7 @@ export function HandoverRadar({
                         {s.text}
                       </span>
                     ))}
-                    <span className="px-1 py-0.5 text-[11px] text-slate-500">{teamName(doc.teamId)} · {doc.location}</span>
+                    <span className="px-1 py-0.5 text-[11px] text-slate-500">{teamName(doc.teamId)} · {formatLocations(doc.locations)}</span>
                   </div>
                 </td>
                 <td className="px-2 py-3 text-slate-700">

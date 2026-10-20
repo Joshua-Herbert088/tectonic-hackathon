@@ -1,165 +1,270 @@
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { PGlite } from "@electric-sql/pglite";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
+import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
+import { migrate as migratePglite } from "drizzle-orm/pglite/migrator";
+import { Pool } from "pg";
 import * as schema from "@/db/schema";
-import { buildSeed, seedHistory } from "./seed";
-import type { Conflict, Db, Doc, DocStatus, Location, TrustScore } from "./types";
+import { config } from "./config";
+import { log } from "./log";
+import { buildConversations, buildSeed, seedHistory } from "./seed";
+import { DEFAULT_TERMS, type Term, type TermKind } from "./taxonomy";
+import { formatLocations } from "./appliesTo";
+import type { Client, Conflict, Conversation, Db, Doc, DocStatus, Folder, Location, Message, Participant, TrustScore } from "./types";
 
-type Orm = BetterSQLite3Database<typeof schema>;
+/**
+ * Database access. Postgres everywhere: any Postgres server when DATABASE_URL is set, otherwise
+ * PGlite – Postgres compiled to WebAssembly, stored in data/pglite – so local development needs no setup.
+ * The same schema and migrations serve both.
+ */
 
-const DB_PATH = path.join(process.cwd(), "data", "trustdrive.db");
-
-// Survive Next.js dev hot reloads without opening a new connection each time.
-const g = globalThis as unknown as { __trustdriveDb?: Orm };
-
-export function orm(): Orm {
-  if (g.__trustdriveDb) return g.__trustdriveDb;
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const sqlite = new Database(DB_PATH);
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: path.join(process.cwd(), "drizzle") });
-  if (!db.select({ n: sql<number>`count(*)` }).from(schema.teams).get()!.n) insertSeed(db);
-  else {
-    insertMissingSeedDocs(db);
-    backfillSeedHistory(db);
-  }
-  g.__trustdriveDb = db;
-  return db;
-}
-
+type Orm = PgDatabase<PgQueryResultHKT, typeof schema>;
 type Tx = Parameters<Parameters<Orm["transaction"]>[0]>[0];
 
-function insertDocs(tx: Tx, docs: Doc[]) {
+const MIGRATIONS = path.join(process.cwd(), "drizzle");
+/** Any fixed number: every instance takes this Postgres advisory lock around migrations and seeding. */
+const SETUP_LOCK = 724_583;
+
+interface Connection {
+  orm: Orm;
+  migrate: () => Promise<void>;
+  close: () => Promise<void>;
+}
+
+function connect(): Connection {
+  if (config.databaseUrl) {
+    const pool = new Pool({ connectionString: config.databaseUrl, max: config.poolSize });
+    pool.on("error", (e) => log.error("postgres pool error", { error: e.message }));
+    const orm = drizzlePg(pool, { schema });
+    return { orm, migrate: () => migratePg(orm, { migrationsFolder: MIGRATIONS }), close: () => pool.end() };
+  }
+  // A production server needs a real database: refuse rather than keep data in a local folder by accident.
+  if (config.production && !process.env.PGLITE_DIR) throw new Error("DATABASE_URL is required in production (set PGLITE_DIR to use an embedded database anyway)");
+  // PGlite creates its own folder but not the ones above it (data/ on a fresh checkout).
+  if (!config.pgliteDir.includes("://")) fs.mkdirSync(path.dirname(config.pgliteDir), { recursive: true });
+  const client = new PGlite(config.pgliteDir);
+  const orm = drizzlePglite(client, { schema });
+  return { orm, migrate: () => migratePglite(orm, { migrationsFolder: MIGRATIONS }), close: () => client.close() };
+}
+
+// The connection survives dev hot reloads; setup runs again when this module reloads, so new migrations
+// apply without a restart.
+const g = globalThis as unknown as { __trustdriveDb?: Connection };
+let ready: Promise<Orm> | undefined;
+
+/** The database, migrated and seeded. */
+export function db(): Promise<Orm> {
+  ready ??= setUp().catch((e) => {
+    ready = undefined; // try again on the next request
+    throw e;
+  });
+  return ready;
+}
+
+async function setUp(): Promise<Orm> {
+  g.__trustdriveDb ??= connect();
+  const conn = g.__trustdriveDb;
+  // One instance at a time: several server instances may start together.
+  await conn.orm.execute(sql`select pg_advisory_lock(${SETUP_LOCK})`);
+  try {
+    if (config.migrateOnStart) await conn.migrate();
+    if (config.seedDemoData) await syncSeed(conn.orm);
+  } finally {
+    await conn.orm.execute(sql`select pg_advisory_unlock(${SETUP_LOCK})`);
+  }
+  return conn.orm;
+}
+
+/** For scripts and tests. */
+export async function migrateAndSeed() {
+  await db();
+}
+
+export async function closeDb() {
+  await g.__trustdriveDb?.close();
+  g.__trustdriveDb = undefined;
+  ready = undefined;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Demo data
+
+async function insertDocs(tx: Tx, docs: Doc[]) {
   for (const d of docs) {
-    tx.insert(schema.documents).values(d).run();
+    await tx.insert(schema.documents).values(d);
     const members = [
       ...d.collaboratorIds.map((personId) => ({ docId: d.id, personId, role: "collaborator" as const })),
       ...d.readerIds.map((personId) => ({ docId: d.id, personId, role: "reader" as const })),
     ];
-    if (members.length) tx.insert(schema.documentMembers).values(members).run();
-    if (d.verifications.length) tx.insert(schema.verifications).values(d.verifications.map((v) => ({ docId: d.id, ...v }))).run();
-    if (d.views.length) tx.insert(schema.views).values(d.views.map((v) => ({ docId: d.id, ...v }))).run();
-    insertHistory(tx, d, 0);
+    if (members.length) await tx.insert(schema.documentMembers).values(members);
+    if (d.verifications.length) await tx.insert(schema.verifications).values(d.verifications.map((v) => ({ docId: d.id, ...v })));
+    if (d.views.length) await tx.insert(schema.views).values(d.views.map((v) => ({ docId: d.id, ...v })));
+    await tx.insert(schema.edits).values(
+      seedHistory(d).map((h) => ({ docId: d.id, personId: h.personId, at: h.at, title: d.title, content: h.content, status: d.status, location: formatLocations(d.locations), teamId: d.teamId })),
+    );
   }
 }
 
-function insertHistory(tx: Tx, d: Doc, shiftMs: number) {
-  const history = seedHistory(d);
-  tx.insert(schema.edits)
-    .values(
-      history.map((h) => ({
-        docId: d.id,
-        personId: h.personId,
-        at: new Date(new Date(h.at).getTime() + shiftMs).toISOString(),
-        title: d.title,
-        content: h.content,
-        status: d.status,
-        location: d.location,
-        teamId: d.teamId,
-      })),
-    )
-    .run();
-}
-
-/**
- * Databases seeded before edit history existed have no snapshots for the demo docs. Add the seeded
- * history (shifted to that database's timestamps) wherever a doc's history doesn't start at creation.
- */
-function backfillSeedHistory(db: Orm) {
-  const seedDocs = new Map(buildSeed().docs.map((d) => [d.id, d]));
-  const rows = db.select({ id: schema.documents.id, createdAt: schema.documents.createdAt }).from(schema.documents).all();
-  const firstEdit = new Map(
-    db
-      .select({ docId: schema.edits.docId, first: sql<string>`min(${schema.edits.at})` })
-      .from(schema.edits)
-      .groupBy(schema.edits.docId)
-      .all()
-      .map((r) => [r.docId, r.first]),
-  );
-  const todo = rows.filter((r) => seedDocs.has(r.id) && (!firstEdit.has(r.id) || firstEdit.get(r.id)! > r.createdAt));
-  if (!todo.length) return;
-  db.transaction((tx) => {
-    for (const r of todo) {
-      const seed = seedDocs.get(r.id)!;
-      insertHistory(tx, seed, new Date(r.createdAt).getTime() - new Date(seed.createdAt).getTime());
-    }
-  });
-}
-
-function insertSeed(db: Orm) {
-  const seed = buildSeed();
-  db.transaction((tx) => {
-    tx.insert(schema.teams).values(seed.teams).run();
-    tx.insert(schema.people).values(seed.people).run();
-    insertDocs(tx, seed.docs);
-  });
-}
-
-/**
- * Adds demo teams, people and documents introduced after this database was first seeded, without
- * touching existing data.
- */
-function insertMissingSeedDocs(db: Orm) {
-  const seed = buildSeed();
-  const teamIds = new Set(db.select({ id: schema.teams.id }).from(schema.teams).all().map((t) => t.id));
-  const newTeams = seed.teams.filter((t) => !teamIds.has(t.id));
-  const personIds = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
-  const newPeople = seed.people.filter((p) => !personIds.has(p.id));
-  if (newTeams.length || newPeople.length) {
-    db.transaction((tx) => {
-      if (newTeams.length) tx.insert(schema.teams).values(newTeams).run();
-      if (newPeople.length) tx.insert(schema.people).values(newPeople).run();
-    });
+async function insertConversations(tx: Tx, conversations: ReturnType<typeof buildConversations>) {
+  for (const { messages, ...c } of conversations) {
+    await tx.insert(schema.conversations).values(c);
+    if (messages.length) await tx.insert(schema.messages).values(messages.map((m) => ({ ...m, conversationId: c.id })));
   }
-
-  const existing = new Set(db.select({ id: schema.documents.id }).from(schema.documents).all().map((d) => d.id));
-  const people = new Set(db.select({ id: schema.people.id }).from(schema.people).all().map((p) => p.id));
-  const missing = seed.docs.filter(
-    (d) => !existing.has(d.id) && [d.ownerId, d.lastEditedById, ...d.collaboratorIds, ...d.readerIds].every((id) => !id || people.has(id)),
-  );
-  if (missing.length) db.transaction((tx) => insertDocs(tx, missing));
 }
 
-export function resetDb() {
-  const db = orm();
-  db.transaction((tx) => {
-    for (const t of [schema.notifications, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.people, schema.teams]) {
-      tx.delete(t).run();
+/**
+ * Adds whatever part of the demo company isn't in the database yet – everything on first start, and
+ * demo data added to seed.ts later – without touching existing rows.
+ */
+async function syncSeed(orm: Orm) {
+  const seed = buildSeed();
+  const ids = async <T extends { id: unknown }>(rows: Promise<T[]>) => new Set((await rows).map((r) => r.id as string));
+  const teamIds = await ids(orm.select({ id: schema.teams.id }).from(schema.teams));
+  const personIds = await ids(orm.select({ id: schema.people.id }).from(schema.people));
+  const clientIds = await ids(orm.select({ id: schema.clients.id }).from(schema.clients));
+  const docIds = await ids(orm.select({ id: schema.documents.id }).from(schema.documents));
+  const convIds = await ids(orm.select({ id: schema.conversations.id }).from(schema.conversations));
+  const folderIds = await ids(orm.select({ id: schema.folders.id }).from(schema.folders));
+  // Like the folders: the default taxonomy goes into a database that has none, and is people's to change after that.
+  const [{ n: termCount }] = await orm.select({ n: count() }).from(schema.taxonomyTerms);
+  const terms = termCount ? [] : DEFAULT_TERMS;
+
+  const teams = seed.teams.filter((t) => !teamIds.has(t.id));
+  const people = seed.people.filter((p) => !personIds.has(p.id));
+  const clients = seed.clients.filter((c) => !clientIds.has(c.id));
+  const conversations = buildConversations().filter((c) => !convIds.has(c.id));
+  // The example folders are only added to a drive that has no folders at all, so a single folder someone
+  // deleted doesn't come back on the next start.
+  // Parents come first in the seed, so inserting in order satisfies the parent reference.
+  const folders = folderIds.size ? [] : seed.folders;
+  const filed = new Set([...folderIds, ...folders.map((f) => f.id)]);
+  const docs = seed.docs.filter((d) => !docIds.has(d.id)).map((d) => ({ ...d, folderId: d.folderId && filed.has(d.folderId) ? d.folderId : undefined }));
+  if (!teams.length && !people.length && !clients.length && !docs.length && !conversations.length && !folders.length && !terms.length) return;
+
+  await orm.transaction(async (tx) => {
+    if (teams.length) await tx.insert(schema.teams).values(teams);
+    if (people.length) await tx.insert(schema.people).values(people);
+    if (clients.length) await tx.insert(schema.clients).values(clients);
+    for (const f of folders) await tx.insert(schema.folders).values(f);
+    // A millisecond apart, so they come back in the order they're written in.
+    const start = Date.now();
+    if (terms.length) await tx.insert(schema.taxonomyTerms).values(terms.map((t, i) => ({ ...toTermRow(t), createdAt: new Date(start + i).toISOString() })));
+    await insertDocs(tx, docs);
+    // Databases from before folders existed: file the demo documents that are still at the top level.
+    const newFolders = new Set(folders.map((f) => f.id));
+    for (const d of seed.docs) {
+      if (docIds.has(d.id) && d.folderId && newFolders.has(d.folderId)) {
+        await tx.update(schema.documents).set({ folderId: d.folderId }).where(and(eq(schema.documents.id, d.id), isNull(schema.documents.folderId)));
+      }
+    }
+    await insertConversations(tx, conversations);
+    const newDocs = new Set(docs.map((d) => d.id));
+    const overrides = seed.overrides.filter((o) => newDocs.has(o.docId)).map(({ id: _id, ...o }) => o);
+    if (overrides.length) await tx.insert(schema.conflictOverrides).values(overrides);
+  });
+  log.info("demo data added", { teams: teams.length, people: people.length, clients: clients.length, docs: docs.length, conversations: conversations.length, folders: folders.length, terms: terms.length });
+}
+
+/** Wipes everything and loads the demo company again. Only offered in demo mode. */
+export async function resetDb() {
+  const orm = await db();
+  await orm.transaction(async (tx) => {
+    for (const t of [schema.notifications, schema.documentSources, schema.messages, schema.conversations, schema.conflictOverrides, schema.trustScores, schema.edits, schema.views, schema.verifications, schema.documentMembers, schema.documents, schema.folders, schema.taxonomyTerms, schema.clients, schema.people, schema.teams]) {
+      await tx.delete(t);
     }
   });
-  insertSeed(db);
+  await syncSeed(orm);
 }
 
-/** Loads teams, people and fully assembled documents – the shape the trust logic works on. */
-export function loadWorld(): Db {
-  const db = orm();
-  const members = db.select().from(schema.documentMembers).all();
-  const verifs = db.select().from(schema.verifications).orderBy(schema.verifications.at).all();
-  const views = db.select().from(schema.views).orderBy(schema.views.at).all();
-  const docs: Doc[] = db
-    .select()
-    .from(schema.documents)
-    .all()
-    .map((d) => ({
-      ...d,
-      supersededById: d.supersededById ?? undefined,
-      collaboratorIds: members.filter((m) => m.docId === d.id && m.role === "collaborator").map((m) => m.personId),
-      readerIds: members.filter((m) => m.docId === d.id && m.role === "reader").map((m) => m.personId),
-      verifications: verifs.filter((v) => v.docId === d.id).map(({ personId, at }) => ({ personId, at })),
-      views: views.filter((v) => v.docId === d.id).map(({ personId, at }) => ({ personId, at })),
-    }));
-  const people = db
-    .select()
-    .from(schema.people)
-    .all()
-    .map((p) => ({ ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined }));
-  const overrides = db.select().from(schema.conflictOverrides).orderBy(schema.conflictOverrides.at).all();
-  return { teams: db.select().from(schema.teams).all(), people, docs, overrides };
+// ---------------------------------------------------------------------------------------------
+// Reads
+
+/** Groups rows by a key, so assembling documents is one pass instead of a scan per document. */
+function groupBy<T, K>(rows: T[], key: (r: T) => K) {
+  const out = new Map<K, T[]>();
+  for (const r of rows) out.set(key(r), [...(out.get(key(r)) ?? []), r]);
+  return out;
+}
+
+/** Loads teams, people, clients and fully assembled documents – the shape the trust logic works on. */
+export async function loadWorld(): Promise<Db> {
+  const orm = await db();
+  const [teams, peopleRows, clientRows, docRows, members, verifs, views, overrides, folderRows, terms] = await Promise.all([
+    orm.select().from(schema.teams),
+    orm.select().from(schema.people),
+    orm.select().from(schema.clients),
+    // Documents in the trash are left out of everything except the trash itself.
+    orm.select().from(schema.documents).where(isNull(schema.documents.trashedAt)),
+    orm.select().from(schema.documentMembers),
+    orm.select().from(schema.verifications).orderBy(schema.verifications.at),
+    orm.select().from(schema.views).orderBy(schema.views.at),
+    orm.select().from(schema.conflictOverrides).orderBy(schema.conflictOverrides.at),
+    orm.select().from(schema.folders),
+    loadTerms(),
+  ]);
+  const membersOf = groupBy(members, (m) => m.docId);
+  const verifsOf = groupBy(verifs, (v) => v.docId);
+  const viewsOf = groupBy(views, (v) => v.docId);
+  const docs: Doc[] = docRows.map(({ trashedAt: _t, trashedById: _b, ...d }) => ({
+    ...d,
+    supersededById: d.supersededById ?? undefined,
+    clientId: d.clientId ?? undefined,
+    confidential: d.confidential || undefined,
+    folderId: d.folderId ?? undefined,
+    collaboratorIds: (membersOf.get(d.id) ?? []).filter((m) => m.role === "collaborator").map((m) => m.personId),
+    readerIds: (membersOf.get(d.id) ?? []).filter((m) => m.role === "reader").map((m) => m.personId),
+    verifications: (verifsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
+    views: (viewsOf.get(d.id) ?? []).map(({ personId, at }) => ({ personId, at })),
+  }));
+  const people = peopleRows.map((p) => ({
+    ...p,
+    leftAt: p.leftAt ?? undefined,
+    previousTeamId: p.previousTeamId ?? undefined,
+    movedTeamAt: p.movedTeamAt ?? undefined,
+    email: p.email ?? undefined,
+    phone: p.phone ?? undefined,
+    clientIds: p.clientIds ?? undefined,
+  }));
+  const clients = clientRows.map((c) => ({ ...c, domain: c.domain ?? undefined }));
+  return { teams, people, docs, overrides, clients, folders: folderRows.map(toFolder), terms };
+}
+
+function toTermRow(t: Term) {
+  return { kind: t.kind, id: t.id, label: t.label, description: t.description, keywords: t.keywords, parentId: t.parent ?? null, createdAt: new Date().toISOString() };
+}
+
+/** The taxonomy in the order it was created (the defaults first, in their written order). */
+export async function loadTerms(): Promise<Term[]> {
+  const rows = await (await db()).select().from(schema.taxonomyTerms).orderBy(asc(schema.taxonomyTerms.createdAt), asc(schema.taxonomyTerms.id));
+  return rows.map((r) => ({ kind: r.kind, id: r.id, label: r.label, description: r.description, keywords: r.keywords, parent: r.parentId ?? undefined }));
+}
+
+export async function createTerm(term: Term) {
+  await (await db()).insert(schema.taxonomyTerms).values(toTermRow(term));
+}
+
+export async function updateTerm(kind: TermKind, id: string, patch: { label: string; description: string; keywords: string[]; parent?: string | null }) {
+  await (await db())
+    .update(schema.taxonomyTerms)
+    .set({ label: patch.label, description: patch.description, keywords: patch.keywords, ...(patch.parent !== undefined ? { parentId: patch.parent } : {}) })
+    .where(and(eq(schema.taxonomyTerms.kind, kind), eq(schema.taxonomyTerms.id, id)));
+}
+
+/** Removes a term. Documents keep a removed tag (it shows as untracked) until someone retags them. */
+export async function deleteTerm(kind: TermKind, id: string) {
+  await (await db()).delete(schema.taxonomyTerms).where(and(eq(schema.taxonomyTerms.kind, kind), eq(schema.taxonomyTerms.id, id)));
+}
+
+function toFolder(f: typeof schema.folders.$inferSelect): Folder {
+  return { id: f.id, name: f.name, parentId: f.parentId ?? undefined, createdById: f.createdById ?? undefined, createdAt: f.createdAt };
+}
+
+export async function loadFolders(): Promise<Folder[]> {
+  return (await (await db()).select().from(schema.folders)).map(toFolder);
 }
 
 function toTrust(row: typeof schema.trustScores.$inferSelect): TrustScore {
@@ -167,75 +272,105 @@ function toTrust(row: typeof schema.trustScores.$inferSelect): TrustScore {
   return rest;
 }
 
-export function latestScore(docId: string, viewerId: string): TrustScore | null {
-  const row = orm()
+export async function latestScore(docId: string, viewerId: string): Promise<TrustScore | null> {
+  const [row] = await (await db())
     .select()
     .from(schema.trustScores)
     .where(and(eq(schema.trustScores.docId, docId), eq(schema.trustScores.viewerId, viewerId)))
     .orderBy(desc(schema.trustScores.id))
-    .limit(1)
-    .get();
+    .limit(1);
   return row ? toTrust(row) : null;
 }
 
 /** Latest score per document for one viewer. */
-export function latestScoresForViewer(viewerId: string): Map<string, TrustScore> {
-  const rows = orm()
-    .select()
+export async function latestScoresForViewer(viewerId: string): Promise<Map<string, TrustScore>> {
+  const rows = await (await db())
+    .selectDistinctOn([schema.trustScores.docId])
     .from(schema.trustScores)
-    .where(
-      and(
-        eq(schema.trustScores.viewerId, viewerId),
-        sql`${schema.trustScores.id} = (select max(id) from trust_scores t2 where t2.doc_id = ${schema.trustScores.docId} and t2.viewer_id = ${viewerId})`,
-      ),
-    )
-    .all();
+    .where(eq(schema.trustScores.viewerId, viewerId))
+    .orderBy(schema.trustScores.docId, desc(schema.trustScores.id));
   return new Map(rows.map((r) => [r.docId, toTrust(r)]));
 }
 
 /** Score history for a document as seen by one viewer, oldest first. */
-export function scoreHistory(docId: string, viewerId: string, limit = 20) {
-  return orm()
+export async function scoreHistory(docId: string, viewerId: string, limit = 20) {
+  const rows = await (await db())
     .select({ score: schema.trustScores.score, computedAt: schema.trustScores.computedAt })
     .from(schema.trustScores)
     .where(and(eq(schema.trustScores.docId, docId), eq(schema.trustScores.viewerId, viewerId)))
     .orderBy(desc(schema.trustScores.id))
-    .limit(limit)
-    .all()
-    .reverse();
+    .limit(limit);
+  return rows.reverse();
 }
 
-export function insertScore(docId: string, viewerId: string, t: TrustScore) {
-  orm().insert(schema.trustScores).values({ docId, viewerId, ...t }).run();
+export async function insertScore(docId: string, viewerId: string, t: TrustScore) {
+  const { fallback: _fallback, ...row } = t;
+  await (await db()).insert(schema.trustScores).values({ docId, viewerId, ...row });
 }
 
-export function addVerification(docId: string, personId: string) {
-  orm().insert(schema.verifications).values({ docId, personId, at: new Date().toISOString() }).run();
+export async function addVerification(docId: string, personId: string) {
+  await (await db()).insert(schema.verifications).values({ docId, personId, at: new Date().toISOString() });
 }
 
-export function documentExists(id: string) {
-  return !!orm().select({ id: schema.documents.id }).from(schema.documents).where(eq(schema.documents.id, id)).get();
+export async function documentExists(id: string) {
+  const [row] = await (await db()).select({ id: schema.documents.id }).from(schema.documents).where(and(eq(schema.documents.id, id), isNull(schema.documents.trashedAt))).limit(1);
+  return !!row;
+}
+
+/** Documents in the trash, newest first, with who put them there. */
+export async function loadTrash() {
+  const rows = await (await db())
+    .select({ id: schema.documents.id, title: schema.documents.title, kind: schema.documents.kind, ownerId: schema.documents.ownerId, folderId: schema.documents.folderId, trashedAt: schema.documents.trashedAt, trashedById: schema.documents.trashedById })
+    .from(schema.documents)
+    .where(isNotNull(schema.documents.trashedAt))
+    .orderBy(desc(schema.documents.trashedAt));
+  return rows.map((r) => ({ ...r, trashedAt: r.trashedAt! }));
+}
+
+export async function trashDocument(docId: string, personId: string) {
+  await (await db()).update(schema.documents).set({ trashedAt: new Date().toISOString(), trashedById: personId }).where(eq(schema.documents.id, docId));
+}
+
+/** Out of the trash, back where it was (its folder, if that still exists). */
+export async function restoreDocument(docId: string) {
+  await (await db()).update(schema.documents).set({ trashedAt: null, trashedById: null }).where(eq(schema.documents.id, docId));
+}
+
+/** Deletes a document for good; its history, scores, members and other rows go with it (cascade). */
+export async function deleteDocumentForever(docId: string) {
+  await (await db()).delete(schema.documents).where(and(eq(schema.documents.id, docId), isNotNull(schema.documents.trashedAt)));
+}
+
+/** The clients a person chose to see; null goes back to their team's clients. */
+export async function setPersonClients(personId: string, clientIds: string[] | null) {
+  await (await db()).update(schema.people).set({ clientIds }).where(eq(schema.people.id, personId));
 }
 
 export interface DocPatch {
   title?: string;
   content?: string;
   status?: DocStatus;
-  location?: Location;
+  locations?: Location[];
+  audienceTeamIds?: string[];
   teamId?: string;
+  tags?: string[];
+  clientId?: string | null;
+  confidential?: boolean;
 }
 
 /**
  * Applies a patch and records a snapshot in `edits`. Only title/content changes count as an
  * "edit" for recency (updatedAt / lastEditedBy); metadata changes are still recorded in history.
  */
-export function updateDocument(docId: string, personId: string, patch: DocPatch) {
-  const db = orm();
-  db.transaction((tx) => {
-    const doc = tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).get();
+export async function updateDocument(docId: string, personId: string, patch: DocPatch) {
+  await (await db()).transaction(async (tx) => {
+    // Lock the row: two people saving at once must not lose each other's snapshot.
+    const [doc] = await tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).for("update");
     if (!doc) return;
     const next = { ...doc, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) };
-    const changed = (["title", "content", "status", "location", "teamId"] as const).some((k) => next[k] !== doc[k]);
+    const changed =
+      (["title", "content", "status", "teamId", "clientId", "confidential"] as const).some((k) => next[k] !== doc[k]) ||
+      (["tags", "locations", "audienceTeamIds"] as const).some((k) => JSON.stringify(next[k]) !== JSON.stringify(doc[k]));
     if (!changed) return;
     const now = new Date().toISOString();
     const contentChanged = next.title !== doc.title || next.content !== doc.content;
@@ -243,111 +378,201 @@ export function updateDocument(docId: string, personId: string, patch: DocPatch)
       next.updatedAt = now;
       next.lastEditedById = personId;
     }
-    tx.update(schema.documents).set(next).where(eq(schema.documents.id, docId)).run();
-    tx.insert(schema.edits).values({ docId, personId, at: now, title: next.title, content: next.content, status: next.status, location: next.location, teamId: next.teamId }).run();
+    await tx.update(schema.documents).set(next).where(eq(schema.documents.id, docId));
+    await tx.insert(schema.edits).values({ docId, personId, at: now, title: next.title, content: next.content, status: next.status, location: formatLocations(next.locations), teamId: next.teamId });
     // Anyone who edits content becomes a collaborator.
     if (contentChanged && doc.ownerId !== personId) {
-      tx.insert(schema.documentMembers)
+      await tx
+        .insert(schema.documentMembers)
         .values({ docId, personId, role: "collaborator" })
-        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } })
-        .run();
+        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } });
     }
   });
 }
 
 /** Hands a document to a new owner. A previous owner who is still at the company stays on as collaborator. */
-export function transferOwnership(docId: string, newOwnerId: string) {
-  const db = orm();
-  db.transaction((tx) => {
-    const doc = tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).get();
+export async function transferOwnership(docId: string, newOwnerId: string) {
+  await (await db()).transaction(async (tx) => {
+    const [doc] = await tx.select().from(schema.documents).where(eq(schema.documents.id, docId)).for("update");
     if (!doc || doc.ownerId === newOwnerId) return;
-    tx.update(schema.documents).set({ ownerId: newOwnerId }).where(eq(schema.documents.id, docId)).run();
-    tx.delete(schema.documentMembers).where(and(eq(schema.documentMembers.docId, docId), eq(schema.documentMembers.personId, newOwnerId))).run();
-    const previous = doc.ownerId ? tx.select().from(schema.people).where(eq(schema.people.id, doc.ownerId)).get() : undefined;
+    await tx.update(schema.documents).set({ ownerId: newOwnerId }).where(eq(schema.documents.id, docId));
+    await tx.delete(schema.documentMembers).where(and(eq(schema.documentMembers.docId, docId), eq(schema.documentMembers.personId, newOwnerId)));
+    const [previous] = doc.ownerId ? await tx.select().from(schema.people).where(eq(schema.people.id, doc.ownerId)) : [];
     if (previous?.active) {
-      tx.insert(schema.documentMembers)
+      await tx
+        .insert(schema.documentMembers)
         .values({ docId, personId: previous.id, role: "collaborator" })
-        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } })
-        .run();
+        .onConflictDoUpdate({ target: [schema.documentMembers.docId, schema.documentMembers.personId], set: { role: "collaborator" } });
     }
   });
 }
 
-export function createDocument(doc: Omit<Doc, "collaboratorIds" | "readerIds" | "verifications" | "views">) {
-  const db = orm();
-  db.transaction((tx) => {
-    tx.insert(schema.documents).values(doc).run();
-    tx.insert(schema.edits)
-      .values({ docId: doc.id, personId: doc.lastEditedById, at: doc.createdAt, title: doc.title, content: doc.content, status: doc.status, location: doc.location, teamId: doc.teamId })
-      .run();
+export async function createDocument(doc: Omit<Doc, "collaboratorIds" | "readerIds" | "verifications" | "views">, sourceConversationIds: string[] = []) {
+  await (await db()).transaction(async (tx) => {
+    await tx.insert(schema.documents).values(doc);
+    if (sourceConversationIds.length) await tx.insert(schema.documentSources).values(sourceConversationIds.map((conversationId) => ({ docId: doc.id, conversationId })));
+    await tx.insert(schema.edits).values({ docId: doc.id, personId: doc.lastEditedById, at: doc.createdAt, title: doc.title, content: doc.content, status: doc.status, location: formatLocations(doc.locations), teamId: doc.teamId });
   });
 }
 
+export async function createClient(client: Client) {
+  await (await db()).insert(schema.clients).values({ ...client, domain: client.domain ?? null });
+}
+
+export async function updateClient(id: string, patch: Omit<Client, "id">) {
+  await (await db()).update(schema.clients).set({ ...patch, domain: patch.domain ?? null }).where(eq(schema.clients.id, id));
+}
+
+export async function deleteClient(id: string) {
+  await (await db()).delete(schema.clients).where(eq(schema.clients.id, id));
+}
+
+export async function createFolder(folder: Folder) {
+  await (await db()).insert(schema.folders).values(folder);
+}
+
+export async function updateFolder(id: string, patch: { name?: string; parentId?: string | null }) {
+  await (await db()).update(schema.folders).set(patch).where(eq(schema.folders.id, id));
+}
+
+/** Removes a folder; its documents and subfolders move up to where the folder was, so nothing is lost. */
+export async function deleteFolder(id: string) {
+  await (await db()).transaction(async (tx) => {
+    const [folder] = await tx.select().from(schema.folders).where(eq(schema.folders.id, id)).for("update");
+    if (!folder) return;
+    await tx.update(schema.documents).set({ folderId: folder.parentId }).where(eq(schema.documents.folderId, id));
+    await tx.update(schema.folders).set({ parentId: folder.parentId }).where(eq(schema.folders.parentId, id));
+    await tx.delete(schema.folders).where(eq(schema.folders.id, id));
+  });
+}
+
+/** Files a document in a folder (null = top of the drive). Not an edit: it's not in the history and doesn't change the score. */
+export async function moveDocument(docId: string, folderId: string | null) {
+  await (await db()).update(schema.documents).set({ folderId }).where(eq(schema.documents.id, docId));
+}
+
 /** Permanently attaches "I saved this despite these conflicts" to a document. */
-export function recordOverrides(docId: string, personId: string, reason: string, conflicts: Conflict[]) {
+export async function recordOverrides(docId: string, personId: string, reason: string, conflicts: Conflict[]) {
   if (!conflicts.length) return;
   const at = new Date().toISOString();
-  orm()
-    .insert(schema.conflictOverrides)
-    .values(
-      conflicts.map((c) => ({
-        docId,
-        personId,
-        at,
-        reason,
-        probability: c.probability,
-        lineNo: c.lineNo,
-        lineText: c.lineText,
-        existingDocId: c.existing.docId,
-        existingTitle: c.existing.title,
-        existingLineNo: c.existing.lineNo,
-        existingLineText: c.existing.lineText,
-      })),
-    )
-    .run();
+  await (await db()).insert(schema.conflictOverrides).values(
+    conflicts.map((c) => ({
+      docId,
+      personId,
+      at,
+      reason,
+      probability: c.probability,
+      lineNo: c.lineNo,
+      lineText: c.lineText,
+      existingDocId: c.existing.docId,
+      existingTitle: c.existing.title,
+      existingLineNo: c.existing.lineNo,
+      existingLineText: c.existing.lineText,
+    })),
+  );
 }
 
 /** Content snapshots per document, oldest first – input for blame / contribution analysis. */
-export function loadHistory(docIds?: string[]) {
-  const q = orm()
-    .select({ docId: schema.edits.docId, personId: schema.edits.personId, at: schema.edits.at, content: schema.edits.content })
+export async function loadHistory(docIds?: string[]) {
+  const orm = await db();
+  const q = orm
+    .select({
+      docId: schema.edits.docId,
+      personId: schema.edits.personId,
+      at: schema.edits.at,
+      title: schema.edits.title,
+      content: schema.edits.content,
+      status: schema.edits.status,
+      location: schema.edits.location,
+      teamId: schema.edits.teamId,
+    })
     .from(schema.edits);
-  const rows = (docIds ? q.where(inArray(schema.edits.docId, docIds)) : q).orderBy(asc(schema.edits.at), asc(schema.edits.id)).all();
-  const out = new Map<string, { personId: string | null; at: string; content: string }[]>();
-  for (const r of rows) out.set(r.docId, [...(out.get(r.docId) ?? []), r]);
-  return out;
+  const rows = await (docIds ? q.where(inArray(schema.edits.docId, docIds.length ? docIds : [""])) : q).orderBy(asc(schema.edits.at), asc(schema.edits.id));
+  return groupBy(rows, (r) => r.docId);
 }
 
 export type NotificationRow = typeof schema.notifications.$inferSelect;
 export type NewNotification = Omit<typeof schema.notifications.$inferInsert, "id" | "createdAt" | "readAt">;
 
-export function insertNotifications(items: NewNotification[]) {
+export async function insertNotifications(items: NewNotification[]) {
   if (!items.length) return;
   const createdAt = new Date().toISOString();
-  orm()
-    .insert(schema.notifications)
-    .values(items.map((n) => ({ ...n, createdAt })))
-    .run();
+  await (await db()).insert(schema.notifications).values(items.map((n) => ({ ...n, createdAt })));
 }
 
-export function listNotifications(recipientId: string, limit = 30) {
-  const db = orm();
-  const items = db
-    .select()
-    .from(schema.notifications)
-    .where(eq(schema.notifications.recipientId, recipientId))
-    .orderBy(desc(schema.notifications.id))
-    .limit(limit)
-    .all();
-  const unread = db
-    .select({ n: sql<number>`count(*)` })
-    .from(schema.notifications)
-    .where(and(eq(schema.notifications.recipientId, recipientId), isNull(schema.notifications.readAt)))
-    .get()!.n;
+export async function listNotifications(recipientId: string, limit = 30) {
+  const orm = await db();
+  const mine = eq(schema.notifications.recipientId, recipientId);
+  const [items, [{ unread }]] = await Promise.all([
+    orm.select().from(schema.notifications).where(mine).orderBy(desc(schema.notifications.id)).limit(limit),
+    orm
+      .select({ unread: count() })
+      .from(schema.notifications)
+      .where(and(mine, isNull(schema.notifications.readAt))),
+  ]);
   return { items, unread };
 }
 
-export function markNotificationsRead(recipientId: string, ids?: number[]) {
-  const where = and(eq(schema.notifications.recipientId, recipientId), isNull(schema.notifications.readAt), ids ? inArray(schema.notifications.id, ids) : undefined);
-  orm().update(schema.notifications).set({ readAt: new Date().toISOString() }).where(where).run();
+export async function markNotificationsRead(recipientId: string, ids?: number[]) {
+  const where = and(eq(schema.notifications.recipientId, recipientId), isNull(schema.notifications.readAt), ids ? inArray(schema.notifications.id, ids.length ? ids : [-1]) : undefined);
+  await (await db()).update(schema.notifications).set({ readAt: new Date().toISOString() }).where(where);
+}
+
+function toMessage(m: typeof schema.messages.$inferSelect): Message {
+  return { id: m.id, personId: m.personId ?? undefined, authorName: m.authorName, authorEmail: m.authorEmail ?? undefined, sentAt: m.sentAt, body: m.body };
+}
+
+/** Conversations with their messages (oldest first), newest conversation activity first. */
+export async function loadConversations(ids?: string[]): Promise<Conversation[]> {
+  const orm = await db();
+  const q = orm.select().from(schema.conversations);
+  const convs = await (ids ? q.where(inArray(schema.conversations.id, ids.length ? ids : [""])) : q);
+  if (!convs.length) return [];
+  const msgs = await orm
+    .select()
+    .from(schema.messages)
+    .where(inArray(schema.messages.conversationId, convs.map((c) => c.id)))
+    .orderBy(asc(schema.messages.sentAt), asc(schema.messages.id));
+  const byConversation = groupBy(msgs, (m) => m.conversationId);
+  const last = (c: Conversation) => c.messages.at(-1)?.sentAt ?? c.createdAt;
+  return convs
+    .map((c) => ({
+      ...c,
+      clientId: c.clientId ?? undefined,
+      importedById: c.importedById ?? undefined,
+      messages: (byConversation.get(c.id) ?? []).map(toMessage),
+    }))
+    .sort((a, b) => last(b).localeCompare(last(a)));
+}
+
+export async function createConversation(c: Omit<Conversation, "messages">, messages: Omit<Message, "id">[]) {
+  await (await db()).transaction(async (tx) => {
+    await tx.insert(schema.conversations).values(c);
+    if (messages.length) await tx.insert(schema.messages).values(messages.map((m) => ({ ...m, conversationId: c.id })));
+  });
+}
+
+/** Adds messages to a conversation and makes sure everyone involved is a participant. */
+export async function addMessages(conversationId: string, messages: Omit<Message, "id">[], participants: Participant[]) {
+  await (await db()).transaction(async (tx) => {
+    const [conv] = await tx.select({ participants: schema.conversations.participants }).from(schema.conversations).where(eq(schema.conversations.id, conversationId)).for("update");
+    if (!conv) return;
+    const all = new Map(conv.participants.map((p) => [p.personId ?? p.email ?? p.name, p]));
+    for (const p of participants) all.set(p.personId ?? p.email ?? p.name, p);
+    await tx.update(schema.conversations).set({ participants: [...all.values()] }).where(eq(schema.conversations.id, conversationId));
+    if (messages.length) await tx.insert(schema.messages).values(messages.map((m) => ({ ...m, conversationId })));
+  });
+}
+
+/** Conversations a document was written from. */
+export async function documentSources(docId: string) {
+  const rows = await (await db()).select({ id: schema.documentSources.conversationId }).from(schema.documentSources).where(eq(schema.documentSources.docId, docId));
+  return rows.length ? loadConversations(rows.map((r) => r.id)) : [];
+}
+
+/** A person by id or (case-insensitive) email, for identifying who's signed in. */
+export async function findPerson(by: { id: string } | { email: string }) {
+  const where = "id" in by ? eq(schema.people.id, by.id) : sql`lower(${schema.people.email}) = ${by.email.toLowerCase()}`;
+  const [p] = await (await db()).select().from(schema.people).where(where).limit(1);
+  return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined } : null;
 }

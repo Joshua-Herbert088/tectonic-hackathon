@@ -1,61 +1,76 @@
-import type { NextRequest } from "next/server";
-import { loadWorld, recordOverrides, updateDocument } from "@/lib/db";
+import { requireViewer } from "@/lib/auth";
+import { deleteDocumentForever, loadTrash, loadWorld, recordOverrides, updateDocument } from "@/lib/db";
+import { handle, HttpError, readBody } from "@/lib/http";
 import { notifyEdit, notifyOverrides } from "@/lib/notify";
-import { docDetail, gateDraft, getViewer, redundancyCheck } from "@/lib/service";
+import { documentPatch } from "@/lib/schemas";
+import { checkAppliesTo, docDetail, gateDraft, redundancyCheck, requireTags } from "@/lib/service";
 import { substance } from "@/lib/similarity";
-import { LOCATIONS, STATUSES } from "@/lib/types";
 
-export async function GET(req: NextRequest, ctx: RouteContext<"/api/docs/[id]">) {
-  const { id } = await ctx.params;
-  const detail = docDetail(id, req.nextUrl.searchParams.get("viewer"));
-  if (!detail) return Response.json({ error: "Not found" }, { status: 404 });
+type Ctx = RouteContext<"/api/docs/[id]">;
+
+export const GET = handle(async (req, ctx: Ctx) => {
+  const detail = await docDetail((await ctx.params).id, await requireViewer(req));
+  if (!detail) throw new HttpError(404, "Not found");
   return Response.json(detail);
-}
+});
 
 /**
  * Content edits go through the conflict gate (409 on hard conflicts unless overridden); metadata edits don't.
  * Filling a still-empty document is treated like an upload and also gets the redundancy warning.
  * Authors of lines that were changed – or contradicted by an override – are notified.
  */
-export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/docs/[id]">) {
+export const PATCH = handle(async (req, ctx: Ctx) => {
   const { id } = await ctx.params;
-  const world = loadWorld();
+  const viewer = await requireViewer(req);
+  const body = await readBody(req, documentPatch);
+  const world = await loadWorld();
   const doc = world.docs.find((d) => d.id === id);
-  if (!doc) return Response.json({ error: "Not found" }, { status: 404 });
-  const body = await req.json();
-  const viewer = getViewer(world, body.viewerId);
+  if (!doc) throw new HttpError(404, "Not found");
+  if (body.title !== undefined && !body.title.trim()) throw new HttpError(400, "A document needs a name.");
   const patch = {
-    title: typeof body.title === "string" ? body.title : undefined,
-    content: typeof body.content === "string" ? body.content : undefined,
-    status: STATUSES.includes(body.status) ? body.status : undefined,
-    location: LOCATIONS.includes(body.location) ? body.location : undefined,
-    teamId: world.teams.some((t) => t.id === body.teamId) ? body.teamId : undefined,
+    title: body.title?.trim(),
+    content: body.content,
+    status: body.status,
+    ...checkAppliesTo(world, body.locations, body.audienceTeamIds),
+    tags: body.tags ? [...new Set(body.tags)] : undefined,
+    clientId: body.clientId === null || world.clients.some((c) => c.id === body.clientId) ? body.clientId : undefined,
+    confidential: body.confidential,
   };
+  const confidential = patch.confidential ?? !!doc.confidential;
   const title = patch.title ?? doc.title;
   const content = patch.content ?? doc.content;
 
   const contentChanged = content !== doc.content || title !== doc.title;
+  // Saving content (a new document's first save, or any edit of one that was never tagged) needs tags.
+  if (contentChanged) requireTags(world, content, patch.tags ?? doc.tags);
   let gate: Awaited<ReturnType<typeof gateDraft>> | null = null;
   if (contentChanged) {
     const [g, similar] = await Promise.all([
-      gateDraft(
-        world,
-        { title, content, location: patch.location ?? doc.location, teamId: patch.teamId ?? doc.teamId, docId: doc.id, previousContent: doc.content },
-        body.override,
-      ),
-      substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar }),
+      gateDraft(world, { title, content, locations: patch.locations ?? doc.locations, teamId: doc.teamId, docId: doc.id, previousContent: doc.content, confidential }, body.override),
+      substance(doc.content) ? Promise.resolve([]) : redundancyCheck(world, { title, content, confidential }, { excludeDocId: doc.id, acknowledged: body.acknowledgeSimilar }),
     ]);
     if (!g.ok) return Response.json({ ...g.body, similar }, { status: g.status });
     if (similar.length) return Response.json({ error: "similar", similar, check: g.check }, { status: 409 });
     gate = g;
   }
 
-  if (contentChanged) notifyEdit(world, doc, title, content, viewer.id);
-  updateDocument(id, viewer.id, patch);
+  if (contentChanged) await notifyEdit(world, doc, title, content, viewer.id);
+  await updateDocument(id, viewer.id, patch);
   if (gate?.ok) {
-    const reason = body.override?.reason?.trim() ?? "";
-    recordOverrides(id, viewer.id, reason, gate.overridden);
-    notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
+    const reason = body.override?.reason ?? "";
+    await recordOverrides(id, viewer.id, reason, gate.overridden);
+    await notifyOverrides(world, { id, title }, gate.overridden, viewer.id, reason);
   }
-  return Response.json({ ...docDetail(id, viewer.id), conflictCheck: gate?.ok ? gate.check : null });
-}
+  return Response.json({ ...(await docDetail(id, viewer)), conflictCheck: gate?.ok ? gate.check : null });
+});
+
+/** Deletes a document for good. Only from the trash, by its owner or whoever put it there. */
+export const DELETE = handle(async (req, ctx: Ctx) => {
+  const viewer = await requireViewer(req);
+  const { id } = await ctx.params;
+  const doc = (await loadTrash()).find((d) => d.id === id);
+  if (!doc) throw new HttpError(409, "Move the document to the trash first.");
+  if (doc.ownerId !== viewer.id && doc.trashedById !== viewer.id) throw new HttpError(403, "Only the owner or the person who removed it can delete it for good.");
+  await deleteDocumentForever(id);
+  return Response.json({ ok: true });
+});

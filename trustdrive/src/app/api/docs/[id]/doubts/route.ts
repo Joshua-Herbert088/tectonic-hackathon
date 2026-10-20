@@ -1,16 +1,14 @@
-import type { NextRequest } from "next/server";
+import { requireViewer } from "@/lib/auth";
 import { loadWorld } from "@/lib/db";
 import { contradictionDoubts } from "@/lib/doubts";
+import { handle, HttpError } from "@/lib/http";
 
-/** Lines of this document that Jev finds contradicting other documents. */
-export async function GET(_req: NextRequest, ctx: RouteContext<"/api/docs/[id]/doubts">) {
+/** Lines of this document that contradict other documents (Jev, or the rules without Jev). */
+export const GET = handle(async (req, ctx: RouteContext<"/api/docs/[id]/doubts">) => {
+  await requireViewer(req);
   const { id } = await ctx.params;
-  const world = loadWorld();
+  const world = await loadWorld();
   const doc = world.docs.find((d) => d.id === id);
-  if (!doc) return Response.json({ error: "Not found" }, { status: 404 });
-  try {
-    return Response.json({ doubts: await contradictionDoubts(world, doc) });
-  } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 502 });
-  }
-}
+  if (!doc) throw new HttpError(404, "Not found");
+  return Response.json({ doubts: await contradictionDoubts(world, doc) });
+});
