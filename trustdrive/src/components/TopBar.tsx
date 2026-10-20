@@ -66,8 +66,8 @@ export function TopBar() {
       </div>
       <div className="relative">
         <button
-          onClick={() => canSwitch && setOpen(!open)}
-          className={`flex items-center gap-3 rounded-full py-1 pl-3 pr-1 ${canSwitch ? "hover:bg-slate-200/60" : "cursor-default"}`}
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-3 rounded-full py-1 pl-3 pr-1 hover:bg-slate-200/60"
         >
           <div className="hidden text-right leading-tight md:block">
             <div className="text-xs text-slate-500">{canSwitch ? "Viewing as" : "Signed in as"}</div>
@@ -79,8 +79,8 @@ export function TopBar() {
           <>
             <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
             <div className="absolute right-0 z-20 mt-2 max-h-[70vh] w-80 overflow-auto rounded-2xl bg-white py-2 shadow-xl ring-1 ring-black/5">
-              <div className="px-4 py-2 text-xs text-slate-500">Switch user – trust scores depend on who is asking (location, team, access)</div>
-              {people.filter((p) => p.active).map((p) => (
+              {canSwitch && <div className="px-4 py-2 text-xs text-slate-500">Demo: switch user – trust scores depend on who is asking (location, team, access)</div>}
+              {canSwitch && people.filter((p) => p.active).map((p) => (
                 <button
                   key={p.id}
                   onClick={async () => {
@@ -96,7 +96,7 @@ export function TopBar() {
                   </div>
                 </button>
               ))}
-              <div className="my-2 border-t border-slate-200" />
+              {canSwitch && <div className="my-2 border-t border-slate-200" />}
               <button
                 onClick={async () => {
                   await fetch("/api/session", { method: "DELETE" });

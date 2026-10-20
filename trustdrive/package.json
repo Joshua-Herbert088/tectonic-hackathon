@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "node scripts/migrate.mjs",
+    "signin-code": "node --env-file-if-exists=.env.local scripts/signin-code.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm test"
   },

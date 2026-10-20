@@ -27,7 +27,11 @@ const env = z
     JEV_DISABLED: flag(false),
     /** "Reset demo data" wipes the database. Allowed by default except in production, and never without demo data. */
     ALLOW_DEMO_RESET: z.enum(["1", "0", "true", "false", ""]).optional(),
-    /** What people enter to sign in. Without it nobody can: every page and API answers 503. */
+    /** Signs sessions and personal sign-in codes. Without it nobody can sign in. Changing it signs everyone out and replaces every code. */
+    TRUSTDRIVE_SECRET: z.union([z.literal(""), z.string().min(32, "must be at least 32 characters")]).optional(),
+    /** Demo mode: the shared access code signs in, and "Viewing as" can switch to anyone. Off by default. */
+    DEMO_MODE: flag(false),
+    /** The shared access code, in demo mode only. */
     TRUSTDRIVE_ACCESS_CODE: z.union([z.literal(""), z.string().min(8, "must be at least 8 characters")]).optional(),
   });
 
@@ -45,6 +49,8 @@ function load() {
     migrateOnStart: e.MIGRATE_ON_START,
     seedDemoData: e.SEED_DEMO_DATA,
     jev: { apiKey: e.JEV_API_KEY, url: e.JEV_API_URL, disabled: e.JEV_DISABLED },
+    secret: e.TRUSTDRIVE_SECRET || undefined,
+    demoMode: e.DEMO_MODE,
     accessCode: e.TRUSTDRIVE_ACCESS_CODE || undefined,
     allowDemoReset: e.SEED_DEMO_DATA && (e.ALLOW_DEMO_RESET ? e.ALLOW_DEMO_RESET === "1" || e.ALLOW_DEMO_RESET === "true" : e.NODE_ENV !== "production"),
   };

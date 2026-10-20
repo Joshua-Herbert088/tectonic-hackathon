@@ -31,6 +31,17 @@ describe("document settings", () => {
   });
 });
 
+describe("document text", () => {
+  test("only the owner, collaborators and the maintaining team change it; editing doesn't make anyone else a collaborator", async () => {
+    const doc = world.docs.find((d) => d.id === "remote-work-be-2026")!;
+    const outsider = outsiderOf(doc);
+    await expect(editDocument(outsider, doc.id, { content: `${doc.content}\n\nAdded by someone else.` })).rejects.toMatchObject({ status: 403 });
+    expect((await loadWorld()).docs.find((d) => d.id === doc.id)!.collaboratorIds).not.toContain(outsider.id);
+    const teammate = world.people.find((p) => p.active && p.teamId === doc.teamId && !maintains(doc, p))!;
+    await expect(editDocument(teammate, doc.id, { content: `${doc.content}\n\nA teammate's note.`, acknowledgeSimilar: true })).resolves.toMatchObject({ status: 200 });
+  });
+});
+
 describe("tags", () => {
   test("new tags must be in the taxonomy; ones a document already has may stay", () => {
     const known = world.docs.flatMap((d) => d.tags).find((t) => world.terms.some((x) => x.id === t))!;

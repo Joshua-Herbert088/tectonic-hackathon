@@ -448,6 +448,12 @@ export async function checkStorage(db: Db, viewer: Person, adding: { document?: 
 export const maintains = (doc: Pick<Doc, "ownerId" | "collaboratorIds">, person: Person) => doc.ownerId === person.id || doc.collaboratorIds.includes(person.id);
 
 /**
+ * Who may change a document's title and text: its owner, collaborators and the team that maintains it.
+ * Anyone else who sees something wrong suggests it to them. Being able to see a document isn't enough.
+ */
+export const mayEditContent = (doc: Pick<Doc, "ownerId" | "collaboratorIds" | "teamId">, person: Person) => maintains(doc, person) || person.teamId === doc.teamId;
+
+/**
  * Who may give a document a new owner: its owner at any time. When it needs one (no owner, or the owner
  * left or moved team), also its collaborators, the team that maintains it and the suggested successors.
  */
@@ -506,6 +512,7 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
   const content = patch.content ?? doc.content;
 
   const contentChanged = content !== doc.content || title !== doc.title;
+  if (contentChanged && !mayEditContent(doc, viewer)) throw new HttpError(403, "Only the owner, collaborators and the team that maintains this document can change its text. Ask the owner, or suggest the change to them.");
   // Saving content (a new document's first save, or any edit of one that was never tagged) needs tags.
   if (contentChanged) requireTags(world, content, patch.tags ?? doc.tags);
   let gate: GateResult | null = null;
