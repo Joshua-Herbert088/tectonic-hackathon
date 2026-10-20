@@ -36,7 +36,6 @@ npm run demo
 3. **Stop** with Ctrl+C. Your changes are kept for next time; **Reset demo data** (bottom of the sidebar) brings back the original company.
 
 **Good to know**
-- `npm install` may print warnings about install scripts it skipped. They're harmless.
 - Without a Jev API key, trust scores and checks come from built-in rules, and a banner says so. To use Jev: `JEV_API_KEY=jv_live_… npm run demo` (Windows PowerShell: `$env:JEV_API_KEY="jv_live_…"; npm run demo`).
 - Port 3000 in use? The demo takes the next free port: use the address in the box.
 - The browser didn't open? Open the address from the box yourself.
@@ -367,6 +366,8 @@ On first start the database is created, the migrations in `trustdrive/drizzle/` 
 | `npm test` | Tests (vitest), against a throwaway in-memory Postgres and never calling Jev |
 | `JEV_EVAL=1 npm test -- conflicts.jev` | Runs the labelled conflict pairs through Jev and the rules and compares them (calls the paid API) |
 | `npm run db:generate` / `db:migrate` / `db:studio` | Create a migration after changing `src/db/schema.ts` / apply migrations now / browse the database |
+
+`trustdrive/.npmrc` keeps `npm install` quiet (errors only, no audit summary). `npm audit` still lists the `braces` advisory, which reaches only the lint tooling (through `eslint-config-next`) and has no fixed release yet; the app itself has no known vulnerable dependencies.
 
 Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time someone opens the drive, all visible documents are scored, which takes a few seconds. **CI** runs lint, typecheck, tests and a build on every push and pull request (`.github/workflows/ci.yml`).
 
