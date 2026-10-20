@@ -576,3 +576,8 @@ export async function findPerson(by: { id: string } | { email: string }) {
   const [p] = await (await db()).select().from(schema.people).where(where).limit(1);
   return p ? { ...p, leftAt: p.leftAt ?? undefined, previousTeamId: p.previousTeamId ?? undefined, movedTeamAt: p.movedTeamAt ?? undefined, email: p.email ?? undefined, phone: p.phone ?? undefined, clientIds: p.clientIds ?? undefined } : null;
 }
+
+/** Liveness of the database, for the health check. */
+export async function pingDb() {
+  await (await db()).execute(sql`select 1`);
+}

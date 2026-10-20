@@ -199,7 +199,7 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 | `npm run dev` | Development server on :3000 |
 | `npm run build` / `npm start` | Production build and server |
 | `npm run lint` / `npm run typecheck` | ESLint / TypeScript |
-| `npm run check` | Lint, typecheck and tests together |
+| `npm run check` | Lint, typecheck and tests together (what CI runs, plus a build) |
 | `npm test` | Tests (vitest), against a throwaway in-memory Postgres and never calling Jev: the conflict rules, duplicate estimate, conversation import and handover drafts, the database layer, and the route wrapper |
 | `JEV_EVAL=1 npm test -- conflicts.jev` | Runs the same labelled pairs through Jev and the rules and prints a comparison (calls the paid API, Node 21+) |
 | `npm run db:generate` | Create a migration after changing `src/db/schema.ts` (applied automatically on the next start) |
@@ -211,6 +211,19 @@ On first start, the embedded Postgres database is created in `trustdrive/data/pg
 - **No network for Jev?** Add `JEV_DISABLED=1` to `.env.local`. Trust scores, conflict checks, duplicate warnings and doubts then all run on the rule-based fallbacks; the UI labels each result as rule-based. Without the flag, the same fallbacks kick in automatically whenever Jev can't be reached.
 - Demo documents added to `src/lib/seed.ts` later are inserted into existing databases automatically on startup.
 - Scoring costs roughly **$0.0004 per document per viewer**, a conflict or duplicate check about **$0.001**. The first time a user opens the drive, all visible documents are scored, which takes a few seconds.
+- **CI:** every push and pull request runs lint, typecheck, tests and a build (`.github/workflows/ci.yml`).
+
+### Docker
+`trustdrive/Dockerfile` builds a production image (Next.js standalone server, non-root, port 8080). A production server needs a real database, so pass `DATABASE_URL`; for a quick try, `PGLITE_DIR=memory://` uses a throwaway embedded database instead.
+
+```bash
+cd trustdrive
+docker build -t trustdrive .
+docker run --rm -p 8080:8080 -e PGLITE_DIR=memory:// -e JEV_DISABLED=1 trustdrive
+# open http://localhost:8080 · /api/health answers when the database does
+```
+
+Migrations run on startup; with `MIGRATE_ON_START=false`, run them separately with `node scripts/migrate.mjs` in the same image.
 
 ### Suggested demo
 1. **Viewing as** (top right) switches user. Start as Jonas Maes, a Belgian payroll consultant. **For you** (the home page) shows what needs him: his documents that need checking, clients waiting for an answer, and handovers he could pick up. Open **Drive**, sort by trust and open *Year-end payroll closing procedure – Belgium* (0) and its *2026* version (~99).
@@ -268,8 +281,8 @@ trustdrive/
 - **No login or permissions.** "Viewing as" is a user switcher, anyone can edit any document, and only the status/location/team fields are limited to the owner and collaborators. There's no admin screen: people are added to the `people` table with SQL.
 - **No real Google Drive integration.** Documents live in TrustDrive's own Postgres database.
 - **Uploads are text only** (`.md` / `.txt`). No PDF, Word or spreadsheet parsing; "sheet" and "pdf" are only icons.
-- **Missing drive features:** deleting and renaming documents, and sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.
-- **Few automated tests.** `npm test` covers the conflict rules and the duplicate estimate; the rest was tested by hand against the API. On the 17 labelled conflict pairs (`src/lib/conflict-cases.ts`), Jev matched the label on 16 (it blocked a draft proposal against a current rule) and the rules on 17, but the rules were tuned on those same pairs, so that's not an independent measurement.
+- **Missing drive features:** sharing management. Folders have no permissions of their own: anyone can create, rename, move or delete them.
+- **The UI isn't tested automatically.** `npm test` covers the library code (conflict rules, duplicate estimate, tagging and taxonomy, applies-to, confidential handling, folders, trash, conversation import, handover drafts, messaging, the database layer and the route wrapper); pages were tested by hand. On the 17 labelled conflict pairs (`src/lib/conflict-cases.ts`), Jev matched the label on 16 (it blocked a draft proposal against a current rule) and the rules on 17, but the rules were tuned on those same pairs, so that's not an independent measurement.
 
 **Trust score**
 - **Opening a document isn't recorded as a view.** Views are one of Jev's inputs, so recording them would force a rescore on every open. Usage numbers come from the demo data only.

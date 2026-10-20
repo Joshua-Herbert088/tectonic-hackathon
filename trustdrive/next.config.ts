@@ -18,10 +18,14 @@ const devOrigins = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: devOrigins,
+  // A self-contained server (.next/standalone) for the container image; see Dockerfile.
+  output: "standalone",
   outputFileTracingRoot: root,
+  // Local databases must never end up in the image.
+  outputFileTracingExcludes: { "*": ["data/**"] },
   turbopack: { root },
   // Loaded with Node's require instead of bundled: PGlite ships WebAssembly files, pg has optional native
-  // bindings.
+  // bindings, and scripts/migrate.mjs needs drizzle-orm in node_modules of the standalone output.
   serverExternalPackages: ["@electric-sql/pglite", "pg", "drizzle-orm"],
 };
 
