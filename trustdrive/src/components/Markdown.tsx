@@ -112,7 +112,8 @@ export function Markdown({
       i++;
     }
   }
-  return <div className="text-[15px] text-slate-700">{blocks}</div>;
+  // Long words and URLs wrap instead of running off the page.
+  return <div className="text-[15px] text-slate-700 [overflow-wrap:anywhere]">{blocks}</div>;
 }
 
 function inline(s: string) {

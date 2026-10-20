@@ -5,6 +5,7 @@ import { useApp } from "./AppContext";
 import { timeAgo } from "@/lib/time";
 import type { SimilarDoc } from "@/lib/similarity";
 import type { Conflict, ConflictCheck } from "@/lib/types";
+import { useEscape } from "./useEscape";
 
 /** Selects a 1-based line in a textarea and scrolls it into view. */
 export function selectLine(ta: HTMLTextAreaElement | null, lineNo: number) {
@@ -36,6 +37,7 @@ export function ConflictDialog({
   onOverride: (reason: string) => void;
   onClose: () => void;
 }) {
+  useEscape(true, onClose);
   const [overriding, setOverriding] = useState(false);
   const [reason, setReason] = useState("");
   const [editingExisting, setEditingExisting] = useState<Conflict | null>(null);
@@ -180,6 +182,7 @@ function ConflictCard({ c, onEditMine, onEditExisting }: { c: Conflict; onEditMi
 
 /** Edit the other document in place; its save goes through the same conflict gate (without override). */
 function ExistingDocEditor({ conflict, onClose, onSaved }: { conflict: Conflict; onClose: () => void; onSaved: () => void }) {
+  useEscape(true, onClose);
   const { viewerId } = useApp();
   const [content, setContent] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -355,6 +358,7 @@ function SimilarList({ similar, compact }: { similar: SimilarDoc[]; compact?: bo
 }
 
 function SimilarDialog({ similar, busy, error, action, onClose, onContinue }: { similar: SimilarDoc[]; busy: boolean; error: string | null; action: "upload" | "save"; onClose: () => void; onContinue: () => void }) {
+  useEscape(true, onClose);
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"

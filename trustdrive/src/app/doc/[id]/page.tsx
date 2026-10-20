@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/components/AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "@/components/ConflictDialog";
 import { FileIcon } from "@/components/FileIcon";
@@ -11,9 +12,10 @@ import { RecentOverlap } from "@/components/RecentOverlap";
 import { WhoToContact } from "@/components/WhoToContact";
 import type { Contact, FormerContributor } from "@/lib/contacts";
 import { StatusPill } from "@/components/StatusPill";
-import { Avatar, TopBar } from "@/components/TopBar";
+import { Avatar } from "@/components/TopBar";
 import { TrustBadge, trustBand } from "@/components/TrustBadge";
 import { useScores } from "@/components/useScores";
+import { VersionHistory } from "@/components/VersionHistory";
 import { handoverFor } from "@/lib/handover";
 import { timeAgo } from "@/lib/time";
 import { LOCATIONS, STATUSES, type ConflictOverride, type Doc, type Doubt, type GovernanceSnapshot, type Signal, type TrustScore } from "@/lib/types";
@@ -182,12 +184,12 @@ export default function DocPage() {
   };
 
   const related = useScores(detail?.related ?? null, viewerId);
+  const [tab, setTab] = useState<"why" | "people" | "history" | "details">("why");
 
   if (!detail) {
     return (
-      <div className="flex h-screen flex-col">
-        <TopBar showSearch={false} />
-        <div className="grid flex-1 place-items-center text-slate-500">
+      <AppShell compact>
+        <div className="grid flex-1 place-items-center rounded-2xl bg-white text-slate-500">
           {loadError ? (
             <div className="text-center">
               <p>{loadError}</p>
@@ -195,7 +197,7 @@ export default function DocPage() {
             </div>
           ) : "Loading…"}
         </div>
-      </div>
+      </AppShell>
     );
   }
 
@@ -207,16 +209,25 @@ export default function DocPage() {
   const neutral = signals.filter((s) => s.tone === "neutral");
   const canEdit = doc.ownerId === viewerId || doc.collaboratorIds.includes(viewerId);
   const handover = people.length ? handoverFor(doc, people, teams) : null;
+  // One plain sentence on why, from the strongest facts: problems first unless it's trusted.
+  const reasons = trust && trust.score >= 75 ? good : bad.length ? bad : good;
+  const verdict = reasons.slice(0, 2).map((s) => s.text).join(" · ");
+  const tabs = [
+    { id: "why" as const, label: "Why", count: doubts.length },
+    { id: "people" as const, label: "People", count: handover ? 1 : 0 },
+    { id: "history" as const, label: "History", count: 0 },
+    { id: "details" as const, label: "Details", count: 0 },
+  ];
+  const field = "rounded-lg border border-slate-300 bg-white px-2 py-1.5 disabled:opacity-60";
 
   return (
-    <div className="flex h-screen flex-col">
-      <TopBar showSearch={false} />
+    <AppShell compact>
       <SaveGateDialogs gate={saveGate} onEditMine={(lineNo) => setTimeout(() => selectLine(editorRef.current, lineNo), 50)} />
-      <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:flex-row lg:overflow-visible">
         {/* Document */}
-        <main className="flex min-w-0 flex-1 flex-col rounded-2xl bg-white">
-          <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-3">
-            <Link href="/" className="rounded-full p-2 hover:bg-slate-100" aria-label="Back to drive">
+        <main className="flex min-w-0 shrink-0 flex-col rounded-2xl bg-white lg:min-h-0 lg:flex-1 lg:shrink">
+          <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-3">
+            <Link href="/" className="mt-0.5 rounded-full p-2 hover:bg-slate-100" aria-label="Back to drive">
               <svg width="20" height="20" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z" fill="#444746" /></svg>
             </Link>
             <FileIcon kind={doc.kind} size={24} />
@@ -224,23 +235,17 @@ export default function DocPage() {
               {editing ? (
                 <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className="w-full rounded border border-slate-300 px-2 py-1 text-lg outline-none focus:border-blue-500" />
               ) : (
-                <div className="truncate text-lg text-slate-800">{doc.title}</div>
+                <h1 className="truncate text-lg text-slate-900">{doc.title}</h1>
               )}
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span>{teamName(doc.teamId)}</span>·<span>{doc.location}</span>·<span>edited {timeAgo(doc.updatedAt)} by {person(doc.lastEditedById)?.name ?? "unknown"}</span>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                <StatusPill status={doc.status} />
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{teamName(doc.teamId)}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700" title="Applies to">{doc.location}</span>
+                <span>edited {timeAgo(doc.updatedAt)} by {person(doc.lastEditedById)?.name ?? "unknown"}</span>
               </div>
             </div>
-            <select value={doc.status} onChange={(e) => patch({ status: e.target.value })} disabled={!canEdit} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-60" title="Document status">
-              {STATUSES.map((s) => <option key={s}>{s}</option>)}
-            </select>
-            <select value={doc.location} onChange={(e) => patch({ location: e.target.value })} disabled={!canEdit} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-60" title="Location this document applies to">
-              {LOCATIONS.map((l) => <option key={l}>{l}</option>)}
-            </select>
-            <select value={doc.teamId} onChange={(e) => patch({ teamId: e.target.value })} disabled={!canEdit} className="max-w-40 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:opacity-60" title="Team">
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
             {editing ? (
-              <>
+              <div className="flex shrink-0 gap-2">
                 <button onClick={() => setEditing(false)} className="rounded-full px-4 py-1.5 text-sm text-blue-700 hover:bg-blue-50">Cancel</button>
                 <button
                   onClick={() => saveGate.save()}
@@ -249,14 +254,14 @@ export default function DocPage() {
                 >
                   {saveGate.busy ? "Checking for conflicts…" : "Save"}
                 </button>
-              </>
+              </div>
             ) : (
               <button
                 onClick={() => {
                   setDraft({ title: doc.title, content: doc.content });
                   setEditing(true);
                 }}
-                className="rounded-full bg-[#c2e7ff] px-5 py-1.5 text-sm font-medium text-slate-900 hover:bg-[#b3dcf7]"
+                className="shrink-0 rounded-full bg-[#c2e7ff] px-5 py-1.5 text-sm font-medium text-slate-900 hover:bg-[#b3dcf7]"
               >
                 Edit
               </button>
@@ -265,8 +270,14 @@ export default function DocPage() {
 
           <RecentOverlap docId={doc.id} viewerId={viewerId} />
           {saveGate.error && !saveGate.mode && <div className="bg-red-50 px-5 py-2 text-sm text-red-700">{saveGate.error}</div>}
-          <div className="min-h-0 flex-1 overflow-y-auto bg-[#f9fbfd] py-8">
-            <div className="mx-auto min-h-full max-w-[816px] bg-white px-16 py-14 shadow-[0_1px_3px_rgba(60,64,67,.15),0_1px_2px_rgba(60,64,67,.3)]">
+          {!editing && doubts.length > 0 && showMarks && (
+            <div className="flex items-center gap-2 border-b border-slate-100 bg-[#fffbf0] px-5 py-1.5 text-xs text-[#7a4a00]">
+              {doubts.length} line{doubts.length === 1 ? "" : "s"} highlighted – click one to see why.
+              <button onClick={() => setShowMarks(false)} className="ml-auto text-blue-700 hover:underline">Hide highlights</button>
+            </div>
+          )}
+          <div className="bg-[#f9fbfd] py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:py-8">
+            <div className="mx-auto min-h-full max-w-[816px] bg-white px-5 py-6 sm:px-10 sm:py-10 lg:px-16 lg:py-14 shadow-[0_1px_3px_rgba(60,64,67,.15),0_1px_2px_rgba(60,64,67,.3)]">
               {editing ? (
                 <textarea
                   ref={editorRef}
@@ -276,27 +287,38 @@ export default function DocPage() {
                   autoFocus
                 />
               ) : (
-                <Markdown text={doc.content} marks={showMarks ? marks : undefined} activeLine={activeLine} onMark={(n) => focusLine(n, "doc")} />
+                <Markdown
+                  text={doc.content}
+                  marks={showMarks ? marks : undefined}
+                  activeLine={activeLine}
+                  onMark={(n) => {
+                    setTab("why");
+                    focusLine(n, "doc");
+                  }}
+                />
               )}
             </div>
           </div>
         </main>
 
-        {/* Trust panel */}
-        <aside className="flex w-[380px] shrink-0 flex-col overflow-y-auto rounded-2xl bg-white">
+        {/* Trust panel: the verdict first, the evidence in tabs */}
+        <aside className="flex w-full shrink-0 flex-col rounded-2xl bg-white lg:w-[400px] lg:overflow-hidden">
           <section className="border-b border-slate-100 p-5">
-            <div className="flex items-center gap-4">
-              <TrustBadge trust={scoring ? null : trust} loading={scoring || (!trust && !scoreError)} error={!!scoreError} size={84} />
-              <div className="min-w-0">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Trust score</div>
+            <div className="flex items-start gap-4">
+              <TrustBadge trust={scoring ? null : trust} loading={scoring || (!trust && !scoreError)} error={!!scoreError} size={72} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">Trust for you</div>
                 {trust && !scoring ? (
                   <>
-                    <div className="text-xl font-medium" style={{ color: band!.color }}>{band!.label}</div>
-                    {previous !== null && previous !== trust.score && (
-                      <div className={`text-sm font-medium ${trust.score > previous ? "text-[#188038]" : "text-[#c5221f]"}`}>
-                        {trust.score > previous ? "▲" : "▼"} from {previous}
-                      </div>
-                    )}
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xl font-medium" style={{ color: band!.color }}>{band!.label}</span>
+                      {previous !== null && previous !== trust.score && (
+                        <span className={`text-sm font-medium ${trust.score > previous ? "text-[#188038]" : "text-[#c5221f]"}`}>
+                          {trust.score > previous ? "▲" : "▼"} from {previous}
+                        </span>
+                      )}
+                    </div>
+                    {verdict && <p className="mt-1 text-sm leading-5 text-slate-700">{verdict}</p>}
                   </>
                 ) : (
                   <div className="text-sm text-slate-500">{scoreError ? "Jev scoring failed" : "Asking Jev…"}</div>
@@ -304,208 +326,244 @@ export default function DocPage() {
               </div>
             </div>
             {scoreError && <div className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{scoreError}</div>}
-            {trust && !scoring && (
-              <>
-                <LevelBars probs={trust.levelProbabilities} />
-                {detail.history.length > 1 && <History points={detail.history} />}
-                <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>{trust.model} · {Math.round(trust.confidence * 100)}% confident · {trust.latencyMs}ms</span>
-                  <button onClick={rescore} className="text-blue-700 hover:underline">Rescore</button>
-                </div>
-              </>
-            )}
-          </section>
-
-          <section className="border-b border-slate-100 p-5">
             <button
               onClick={verify}
-              className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0b57d0] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#0842a0]"
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-[#0b57d0] px-4 py-2 text-sm font-medium text-white hover:bg-[#0842a0]"
             >
               <svg width="18" height="18" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17Z" fill="#fff" /></svg>
               {justVerified ? "Verified – thanks!" : "I confirm this document is correct"}
             </button>
-            <p className="mt-2 text-center text-[11px] text-slate-500">Records you as having checked this document today.</p>
           </section>
 
-          <section className="border-b border-slate-100 p-5">
-            {good.length > 0 && (
+          <div className="flex border-b border-slate-100 px-3" role="tablist">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+                className={`-mb-px flex items-center gap-1 border-b-2 px-3 py-2.5 text-sm ${tab === t.id ? "border-[#0b57d0] font-medium text-[#0b57d0]" : "border-transparent text-slate-600 hover:text-slate-900"}`}
+              >
+                {t.label}
+                {t.count > 0 && <span className="rounded-full bg-[#fef7e0] px-1.5 text-[11px] font-medium text-[#b06000]">{t.count}</span>}
+              </button>
+            ))}
+          </div>
+
+          <div className="lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+            {tab === "why" && (
               <>
-                <h3 className="mb-2 text-sm font-medium text-slate-800">What&apos;s good</h3>
-                <ul className="mb-4 space-y-2">{good.map((s, i) => <SignalRow key={i} s={s} />)}</ul>
+                <section className="border-b border-slate-100 p-5">
+                  {bad.length > 0 && (
+                    <>
+                      <h3 className="mb-2 text-sm font-medium text-slate-800">Watch out</h3>
+                      <ul className="mb-4 space-y-2">{bad.map((s, i) => <SignalRow key={i} s={s} />)}</ul>
+                    </>
+                  )}
+                  {good.length > 0 && (
+                    <>
+                      <h3 className="mb-2 text-sm font-medium text-slate-800">What&apos;s good</h3>
+                      <ul className="mb-4 space-y-2">{good.map((s, i) => <SignalRow key={i} s={s} />)}</ul>
+                    </>
+                  )}
+                  {neutral.length > 0 && <ul className="space-y-2">{neutral.map((s, i) => <SignalRow key={i} s={s} />)}</ul>}
+                </section>
+                <section className="border-b border-slate-100 p-5">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-sm font-medium text-slate-800">Doubts in the text</h3>
+                    {doubts.length > 0 && !editing && (
+                      <button onClick={() => setShowMarks(!showMarks)} className="text-xs text-blue-700 hover:underline">
+                        {showMarks ? "Hide" : "Show"} highlights
+                      </button>
+                    )}
+                  </div>
+                  {!liveDoubts && !doubtError && (
+                    <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-[#0b57d0]" />
+                      Jev is checking each line against other documents…
+                    </div>
+                  )}
+                  {doubtError && <div className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">Couldn&apos;t check for contradictions: {doubtError}</div>}
+                  {liveDoubts && doubts.length === 0 && <p className="text-sm text-slate-600">No line looks outdated or contradicts another document.</p>}
+                  <ul className="space-y-2">
+                    {doubts.map((d) => (
+                      <DoubtRow key={d.key} d={d} active={d.lineNo === activeLine} onFocus={() => focusLine(d.lineNo, "panel")} />
+                    ))}
+                  </ul>
+                </section>
+                {(detail.conflictDecisions.made.length > 0 || detail.conflictDecisions.against.length > 0) && (
+                  <section className="p-5">
+                    <h3 className="mb-1 text-sm font-medium text-slate-800">Conflict decisions</h3>
+                    <p className="mb-3 text-[11px] text-slate-500">Saved despite a contradiction Jev found. Kept permanently for accountability.</p>
+                    <ul className="space-y-3">
+                      {detail.conflictDecisions.made.map((o) => (
+                        <OverrideRow key={`m${o.id}`} o={o} otherId={o.existingDocId} otherTitle={o.existingTitle} ours={{ no: o.lineNo, text: o.lineText }} theirs={{ no: o.existingLineNo, text: o.existingLineText }} />
+                      ))}
+                      {detail.conflictDecisions.against.map((o) => (
+                        <OverrideRow key={`a${o.id}`} o={o} otherId={o.docId} otherTitle={o.docTitle} ours={{ no: o.existingLineNo, text: o.existingLineText }} theirs={{ no: o.lineNo, text: o.lineText }} />
+                      ))}
+                    </ul>
+                  </section>
+                )}
               </>
             )}
-            {bad.length > 0 && (
+
+            {tab === "people" && (
               <>
-                <h3 className="mb-2 text-sm font-medium text-slate-800">Watch out</h3>
-                <ul className="mb-4 space-y-2">{bad.map((s, i) => <SignalRow key={i} s={s} />)}</ul>
+                {handover && (
+                  <section className="border-b border-slate-100 p-5">
+                    <div className="rounded-xl bg-[#fef7e0] p-3">
+                      <div className="text-sm font-medium text-slate-900">Handover needed</div>
+                      <ul className="mt-1 space-y-0.5 text-xs text-slate-700">
+                        {handover.reasons.map((r, i) => <li key={i}>• {r.text}</li>)}
+                      </ul>
+                      {handover.formerOwnerId && (
+                        <p className="mt-2 text-xs text-slate-600">{person(handover.formerOwnerId)?.name} is still at the company – ask them what changed before taking over.</p>
+                      )}
+                      {handover.successors.length > 0 && <div className="mb-1 mt-3 text-[11px] font-medium uppercase tracking-wide text-slate-500">Suggested new owner</div>}
+                      <ul className="space-y-1.5">
+                        {handover.successors.map((s) => {
+                          const p = person(s.personId);
+                          return (
+                            <li key={s.personId} className="flex items-center gap-2">
+                              <Avatar person={p} size={24} />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm text-slate-800">{s.personId === viewerId ? "You" : p?.name}</div>
+                                <div className="truncate text-[11px] text-slate-500">{s.why.join(" · ")}</div>
+                              </div>
+                              <button onClick={() => transfer(s.personId)} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50">
+                                {s.personId === viewerId ? "Take over" : "Assign"}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {doc.ownerId !== viewerId && !handover.successors.some((s) => s.personId === viewerId) && (
+                        <button onClick={() => transfer(viewerId)} className="mt-3 text-xs font-medium text-blue-700 hover:underline">Take ownership myself</button>
+                      )}
+                    </div>
+                  </section>
+                )}
+                {handedTo && !handover && (
+                  <div className="m-5 rounded-xl bg-[#e6f4ea] p-3 text-xs text-[#0d652d]">
+                    Handed over to <span className="font-medium">{handedTo === viewerId ? "you" : person(handedTo)?.name}</span>. Jev rescored the document with its new owner.
+                  </div>
+                )}
+                <WhoToContact contacts={detail.people.contacts} former={detail.people.former} />
+                <section className="p-5">
+                  <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
+                  <PersonRow label="Owner" id={doc.ownerId} />
+                  {doc.collaboratorIds.map((c) => <PersonRow key={c} label="Collaborator" id={c} />)}
+                  {doc.readerIds.length > 0 && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="w-24 text-xs text-slate-500">Readers</span>
+                      <div className="flex -space-x-1.5">{doc.readerIds.map((r) => <Avatar key={r} person={person(r)} size={24} />)}</div>
+                    </div>
+                  )}
+                  {!owner && <div className="mt-2 text-xs text-[#c5221f]">This document has no owner.</div>}
+                </section>
               </>
             )}
-            {neutral.length > 0 && <ul className="space-y-2">{neutral.map((s, i) => <SignalRow key={i} s={s} />)}</ul>}
-          </section>
 
-          <WhoToContact contacts={detail.people.contacts} former={detail.people.former} />
-
-          <section className="border-b border-slate-100 p-5">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-medium text-slate-800">
-                Doubts in the text{doubts.length > 0 && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 text-xs text-slate-600">{doubts.length}</span>}
-              </h3>
-              {doubts.length > 0 && !editing && (
-                <button onClick={() => setShowMarks(!showMarks)} className="text-xs text-blue-700 hover:underline">
-                  {showMarks ? "Hide" : "Show"} highlights
-                </button>
-              )}
-            </div>
-            {!liveDoubts && !doubtError && (
-              <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
-                <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-[#0b57d0]" />
-                Jev is checking each line against other documents…
-              </div>
-            )}
-            {doubtError && <div className="mb-2 rounded-lg bg-red-50 p-2 text-xs text-red-700">Couldn&apos;t check for contradictions: {doubtError}</div>}
-            {liveDoubts && doubts.length === 0 && <p className="text-sm text-slate-600">No line looks outdated or contradicts another document.</p>}
-            <ul className="space-y-2">
-              {doubts.map((d) => (
-                <DoubtRow key={d.key} d={d} active={d.lineNo === activeLine} onFocus={() => focusLine(d.lineNo, "panel")} />
-              ))}
-            </ul>
-          </section>
-
-          <section className="border-b border-slate-100 p-5">
-            <h3 className="mb-3 text-sm font-medium text-slate-800">People with access</h3>
-            <PersonRow label="Owner" id={doc.ownerId} />
-            {doc.collaboratorIds.map((c) => <PersonRow key={c} label="Collaborator" id={c} />)}
-            {doc.readerIds.length > 0 && (
-              <div className="mt-2 flex items-center gap-2">
-                <span className="w-24 text-xs text-slate-500">Readers</span>
-                <div className="flex -space-x-1.5">{doc.readerIds.map((r) => <Avatar key={r} person={person(r)} size={24} />)}</div>
-              </div>
-            )}
-            {!owner && <div className="mt-2 text-xs text-[#c5221f]">This document has no owner.</div>}
-            {handedTo && !handover && (
-              <div className="mt-3 rounded-xl bg-[#e6f4ea] p-3 text-xs text-[#0d652d]">
-                Handed over to <span className="font-medium">{handedTo === viewerId ? "you" : person(handedTo)?.name}</span>. Jev rescored the document with its new owner.
-              </div>
-            )}
-            {handover && (
-              <div className="mt-3 rounded-xl bg-[#fef7e0] p-3">
-                <div className="text-sm font-medium text-slate-900">Handover needed</div>
-                <ul className="mt-1 space-y-0.5 text-xs text-slate-700">
-                  {handover.reasons.map((r, i) => <li key={i}>• {r.text}</li>)}
-                </ul>
-                {handover.formerOwnerId && (
-                  <p className="mt-2 text-xs text-slate-600">
-                    {person(handover.formerOwnerId)?.name} is still at the company – ask them what changed before taking over.
-                  </p>
+            {tab === "history" && (
+              <>
+                {detail.history.length > 1 && (
+                  <section className="border-b border-slate-100 p-5">
+                    <History points={detail.history} />
+                  </section>
                 )}
-                {handover.successors.length > 0 && <div className="mb-1 mt-3 text-[11px] font-medium uppercase tracking-wide text-slate-500">Suggested new owner</div>}
-                <ul className="space-y-1.5">
-                  {handover.successors.map((s) => {
-                    const p = person(s.personId);
-                    return (
-                      <li key={s.personId} className="flex items-center gap-2">
-                        <Avatar person={p} size={24} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-slate-800">{s.personId === viewerId ? "You" : p?.name}</div>
-                          <div className="truncate text-[11px] text-slate-500">{s.why.join(" · ")}</div>
-                        </div>
-                        <button onClick={() => transfer(s.personId)} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-slate-300 hover:bg-blue-50">
-                          {s.personId === viewerId ? "Take over" : "Assign"}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {doc.ownerId !== viewerId && !handover.successors.some((s) => s.personId === viewerId) && (
-                  <button onClick={() => transfer(viewerId)} className="mt-3 text-xs font-medium text-blue-700 hover:underline">
-                    Take ownership myself
-                  </button>
+                <VersionHistory versions={governance.versionHistory} />
+              </>
+            )}
+
+            {tab === "details" && (
+              <>
+                <section className="border-b border-slate-100 p-5">
+                  <h3 className="mb-3 text-sm font-medium text-slate-800">Details</h3>
+                  <div className="grid grid-cols-[100px_1fr] items-center gap-2 text-sm">
+                    <label className="text-xs text-slate-500" htmlFor="doc-status">Status</label>
+                    <select id="doc-status" value={doc.status} onChange={(e) => patch({ status: e.target.value })} disabled={!canEdit} className={field}>
+                      {STATUSES.map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                    <label className="text-xs text-slate-500" htmlFor="doc-location">Applies to</label>
+                    <select id="doc-location" value={doc.location} onChange={(e) => patch({ location: e.target.value })} disabled={!canEdit} className={field}>
+                      {LOCATIONS.map((l) => <option key={l}>{l}</option>)}
+                    </select>
+                    <label className="text-xs text-slate-500" htmlFor="doc-team">Team</label>
+                    <select id="doc-team" value={doc.teamId} onChange={(e) => patch({ teamId: e.target.value })} disabled={!canEdit} className={field}>
+                      {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                  {!canEdit && <p className="mt-2 text-[11px] text-slate-500">Only the owner and collaborators can change these.</p>}
+                </section>
+                <section className="border-b border-slate-100 p-5">
+                  <h3 className="mb-2 text-sm font-medium text-slate-800">Governance snapshot</h3>
+                  <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                    <span className="text-xs uppercase tracking-wide text-slate-500">Knowledge integrity</span>
+                    <span className="text-lg font-semibold text-slate-800">{governance.score}/100</span>
+                  </div>
+                  <ul className="mb-3 space-y-2 text-sm text-slate-700">
+                    {governance.signals.map((signal, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#0b57d0]" /> <span>{signal}</span></li>)}
+                  </ul>
+                  {governance.facts.length > 0 && (
+                    <>
+                      <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Fact graph</div>
+                      <ul className="space-y-2 text-xs text-slate-600">
+                        {governance.facts.slice(0, 3).map((fact) => (
+                          <li key={`${fact.sourceDocId}-${fact.lineNo}`} className="rounded-lg border border-slate-200 p-2">
+                            <div className="font-medium text-slate-800">{fact.subject}</div>
+                            <div>{fact.value} {fact.unit ? `· ${fact.unit}` : ""}</div>
+                            <div>{fact.country ?? fact.office ?? "Global"} · team {fact.teamId ?? doc.teamId} · {fact.approvalStatus}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </section>
+                {detail.related.length > 0 && (
+                  <section className="border-b border-slate-100 p-5">
+                    <h3 className="mb-3 text-sm font-medium text-slate-800">Related documents</h3>
+                    <ul className="space-y-1">
+                      {detail.related.map((r) => (
+                        <li key={r.id}>
+                          <Link href={`/doc/${r.id}`} className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-slate-50">
+                            <TrustBadge trust={related.trustOf(r)} loading={!related.trustOf(r)} size={30} />
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm text-slate-800">{r.title}</div>
+                              <div className="flex items-center gap-2 text-xs text-slate-500">
+                                <StatusPill status={r.status} /> {r.location} · {timeAgo(r.updatedAt)}
+                              </div>
+                            </div>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 )}
-              </div>
-            )}
-          </section>
-
-          <section className="border-b border-slate-100 p-5">
-            <h3 className="mb-2 text-sm font-medium text-slate-800">Governance snapshot</h3>
-            <div className="mb-3 flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-              <span className="text-xs uppercase tracking-wide text-slate-500">Knowledge integrity</span>
-              <span className="text-lg font-semibold text-slate-800">{governance.score}/100</span>
-            </div>
-            <ul className="mb-3 space-y-2 text-sm text-slate-700">
-              {governance.signals.map((signal, index) => <li key={index} className="flex items-start gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-[#0b57d0]" /> <span>{signal}</span></li>)}
-            </ul>
-            <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Fact graph</div>
-            <ul className="space-y-2 text-xs text-slate-600">
-              {governance.facts.slice(0, 3).map((fact) => (
-                <li key={`${fact.sourceDocId}-${fact.lineNo}`} className="rounded-lg border border-slate-200 p-2">
-                  <div className="font-medium text-slate-800">{fact.subject}</div>
-                  <div>{fact.value} {fact.unit ? `· ${fact.unit}` : ""}</div>
-                  <div>{fact.country ?? fact.office ?? "Global"} · team {fact.teamId ?? doc.teamId} · {fact.approvalStatus}</div>
-                </li>
-              ))}
-            </ul>
-            {governance.versionHistory.length > 0 && (
-              <div className="mt-3">
-                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Version history</div>
-                <ul className="space-y-2 text-xs text-slate-600">
-                  {governance.versionHistory.slice(0, 3).map((event, index) => (
-                    <li key={`${event.at}-${index}`} className="rounded-lg border border-slate-200 p-2">
-                      <div className="font-medium text-slate-800">{timeAgo(event.at)}</div>
-                      <div className="line-clamp-2">{event.contentPreview}</div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-
-          {detail.related.length > 0 && (
-            <section className="border-b border-slate-100 p-5">
-              <h3 className="mb-3 text-sm font-medium text-slate-800">Related documents</h3>
-              <ul className="space-y-1">
-                {detail.related.map((r) => (
-                  <li key={r.id}>
-                    <Link href={`/doc/${r.id}`} className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-slate-50">
-                      <TrustBadge trust={related.trustOf(r)} loading={!related.trustOf(r)} size={30} />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-slate-800">{r.title}</div>
-                        <div className="flex items-center gap-2 text-xs text-slate-500">
-                          <StatusPill status={r.status} /> {r.location} · {timeAgo(r.updatedAt)}
-                        </div>
+                <section className="p-5">
+                  <h3 className="mb-1 text-sm font-medium text-slate-800">How the score was made</h3>
+                  {trust && !scoring && (
+                    <>
+                      <LevelBars probs={trust.levelProbabilities} />
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                        <span>{trust.model} · {Math.round(trust.confidence * 100)}% confident · {trust.latencyMs}ms</span>
+                        <button onClick={rescore} className="text-blue-700 hover:underline">Rescore</button>
                       </div>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {(detail.conflictDecisions.made.length > 0 || detail.conflictDecisions.against.length > 0) && (
-            <section className="border-b border-slate-100 p-5">
-              <h3 className="mb-1 text-sm font-medium text-slate-800">Conflict decisions</h3>
-              <p className="mb-3 text-[11px] text-slate-500">Saved despite a contradiction Jev found. Kept permanently for accountability.</p>
-              <ul className="space-y-3">
-                {detail.conflictDecisions.made.map((o) => (
-                  <OverrideRow key={`m${o.id}`} o={o} otherId={o.existingDocId} otherTitle={o.existingTitle} ours={{ no: o.lineNo, text: o.lineText }} theirs={{ no: o.existingLineNo, text: o.existingLineText }} />
-                ))}
-                {detail.conflictDecisions.against.map((o) => (
-                  <OverrideRow key={`a${o.id}`} o={o} otherId={o.docId} otherTitle={o.docTitle} ours={{ no: o.existingLineNo, text: o.existingLineText }} theirs={{ no: o.lineNo, text: o.lineText }} />
-                ))}
-              </ul>
-            </section>
-          )}
-
-          <section className="p-5">
-            <button onClick={() => setShowInput(!showInput)} className="text-xs text-blue-700 hover:underline">
-              {showInput ? "Hide" : "Show"} what Jev sees
-            </button>
-            {showInput && (
-              <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-slate-50 p-3 text-[10.5px] leading-4 text-slate-700">{JSON.stringify(detail.jevInput, null, 2)}</pre>
+                    </>
+                  )}
+                  <button onClick={() => setShowInput(!showInput)} className="mt-3 text-xs text-blue-700 hover:underline">
+                    {showInput ? "Hide" : "Show"} what Jev sees
+                  </button>
+                  {showInput && (
+                    <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-slate-50 p-3 text-[10.5px] leading-4 text-slate-700">{JSON.stringify(detail.jevInput, null, 2)}</pre>
+                  )}
+                </section>
+              </>
             )}
-          </section>
+          </div>
         </aside>
       </div>
-    </div>
+    </AppShell>
   );
 
   function OverrideRow({ o, otherId, otherTitle, ours, theirs }: { o: ConflictOverride; otherId: string; otherTitle: string; ours: { no: number; text: string }; theirs: { no: number; text: string } }) {

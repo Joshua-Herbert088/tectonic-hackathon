@@ -44,7 +44,7 @@ export function HandoverRadar({
       <p className="px-2 pb-3 text-sm text-slate-600">
         Documents that lost their owner, ranked by how many colleagues still rely on them and how little they can be trusted. Hand each one to someone who knows it.
       </p>
-      <table className="w-full table-fixed text-sm">
+      <table className="w-full min-w-[760px] table-fixed text-sm">
         <thead className="sticky top-0 z-10 bg-white text-left text-slate-600">
           <tr className="border-b border-slate-200">
             <th className="px-2 py-3 font-medium">Name</th>

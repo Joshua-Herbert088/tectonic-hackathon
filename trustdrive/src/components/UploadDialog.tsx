@@ -5,8 +5,10 @@ import { useRef, useState } from "react";
 import { useApp } from "./AppContext";
 import { SaveGateDialogs, selectLine, useSaveGate } from "./ConflictDialog";
 import { LOCATIONS, STATUSES, type DocStatus, type Location } from "@/lib/types";
+import { useEscape } from "./useEscape";
 
 export function UploadDialog({ onClose }: { onClose: () => void }) {
+  useEscape(true, onClose);
   const router = useRouter();
   const { viewerId, person, teams } = useApp();
   const viewer = person(viewerId);

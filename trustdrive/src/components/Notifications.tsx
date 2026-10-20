@@ -6,6 +6,7 @@ import { useApp } from "./AppContext";
 import { Avatar } from "./TopBar";
 import type { NotificationRow } from "@/lib/db";
 import { timeAgo } from "@/lib/time";
+import { useEscape } from "./useEscape";
 
 const POLL_MS = 10_000;
 
@@ -16,6 +17,7 @@ export function NotificationBell() {
   const [items, setItems] = useState<NotificationRow[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  useEscape(open, () => setOpen(false));
 
   const load = useCallback(async () => {
     try {
