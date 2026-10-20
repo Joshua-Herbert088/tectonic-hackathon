@@ -3,7 +3,7 @@ import { deleteDocumentForever, loadTrash, recordActivity, recordOpen } from "@/
 import { handle, HttpError, readBody } from "@/lib/http";
 import { log } from "@/lib/log";
 import { quietNotice } from "@/lib/quiet";
-import { limitWrites } from "@/lib/rateLimit";
+import { limitWrites, withSaveSlot } from "@/lib/rateLimit";
 import { documentPatch } from "@/lib/schemas";
 import { docDetail, editDocument } from "@/lib/service";
 
@@ -33,7 +33,7 @@ export const PATCH = handle(async (req, ctx: Ctx) => {
   const viewer = await requireViewer(req);
   const patch = await readBody(req, documentPatch);
   limitWrites(viewer.id, await sessionId(), (patch.title?.length ?? 0) + (patch.content?.length ?? 0));
-  const { status, body } = await editDocument(viewer, id, patch);
+  const { status, body } = await withSaveSlot(viewer.id, () => editDocument(viewer, id, patch));
   return Response.json(body, { status });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { limitWrites, rateLimit } from "./rateLimit";
+import { limitWrites, MAX_SAVES_PER_PERSON, rateLimit, withSaveSlot } from "./rateLimit";
 
 const tooMany = expect.objectContaining({ status: 429 });
 
@@ -30,5 +30,16 @@ describe("rate limit", () => {
     const t = 9_000_000;
     for (let i = 0; i < 25; i++) limitWrites(`writer-${i % 20}`, "session-big", 199_000, t + i * 61_000);
     expect(() => limitWrites("writer-x", "session-big", 199_000, t + 26 * 61_000)).toThrow(tooMany);
+  });
+
+  test("a person can't run more than a couple of saves at once", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const running = Array.from({ length: MAX_SAVES_PER_PERSON }, () => withSaveSlot("busy", () => slow));
+    await expect(withSaveSlot("busy", async () => "third")).rejects.toMatchObject({ status: 429 });
+    await expect(withSaveSlot("someone-else", async () => "fine")).resolves.toBe("fine");
+    release();
+    await Promise.all(running);
+    await expect(withSaveSlot("busy", async () => "after")).resolves.toBe("after");
   });
 });

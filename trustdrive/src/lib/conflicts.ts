@@ -21,6 +21,10 @@ export const POSSIBLE_THRESHOLD = 0.4;
 const MAX_PAIRS = 60;
 const MAX_PAIRS_PER_LINE = 6;
 const QUESTIONS_PER_CALL = 20;
+/** Lines of a draft checked at most: a huge upload can't make a check take ages. */
+export const MAX_DRAFT_FACTS = 400;
+/** Line comparisons per check at most, once the keyword index has narrowed them down. */
+export const MAX_COMPARISONS = 200_000;
 
 export interface Draft {
   title: string;
@@ -130,20 +134,49 @@ interface Pair {
   priority: number;
 }
 
-function candidatePairs(db: Db, draft: Draft, facts: Fact[]) {
+// Facts of stored documents, extracted once per version instead of on every check.
+const factsCache = new Map<string, { version: string; facts: Fact[] }>();
+function factsOf(doc: Doc) {
+  const version = `${doc.updatedAt}|${doc.content.length}`;
+  const hit = factsCache.get(doc.id);
+  if (hit?.version === version) return hit.facts;
+  const facts = extractFacts(doc.content);
+  factsCache.set(doc.id, { version, facts });
+  return facts;
+}
+
+/**
+ * Pairs of a draft line and a stored line worth deciding. Every pair that can qualify shares a keyword or
+ * an anchor, so an index on those finds them without comparing every line with every line; the order is
+ * the same as comparing them all (document, its line, draft line), so ties are broken the same way.
+ */
+function candidatePairs(db: Db, draft: Draft, allFacts: Fact[]) {
+  const facts = allFacts.slice(0, MAX_DRAFT_FACTS);
   const docs = db.docs.filter((d) => d.id !== draft.docId && !d.supersededById);
-  const pairs: Pair[] = [];
-  for (const doc of docs) {
+  for (const id of factsCache.keys()) if (!db.docs.some((d) => d.id === id)) factsCache.delete(id);
+  const byTerm = new Map<string, number[]>();
+  facts.forEach((f, i) => {
+    for (const t of [...f.keywords, ...[...f.anchors].map((a) => `a:${a}`)]) (byTerm.get(t) ?? byTerm.set(t, []).get(t)!).push(i);
+  });
+  const pairs: (Pair & { order: [number, number, number] })[] = [];
+  let comparisons = 0;
+  docs.forEach((doc, docIndex) => {
+    if (comparisons >= MAX_COMPARISONS) return;
     const scopeBoost =
       (doc.locations.some((l) => draft.locations.includes(l)) ? 0.4 : overlaps(doc.locations, draft.locations) ? 0.2 : 0) + (doc.teamId === draft.teamId ? 0.3 : 0);
-    for (const other of extractFacts(doc.content)) {
-      for (const fact of facts) {
+    factsOf(doc).forEach((other, otherIndex) => {
+      const near = new Set<number>();
+      for (const t of [...other.keywords, ...[...other.anchors].map((a) => `a:${a}`)]) for (const i of byTerm.get(t) ?? []) near.add(i);
+      for (const factIndex of [...near].sort((a, b) => a - b)) {
+        if (++comparisons > MAX_COMPARISONS) return;
+        const fact = facts[factIndex];
+        const add = (priority: number) => pairs.push({ fact, doc, other, priority, order: [docIndex, otherIndex, factIndex] });
         if (fact.numbers === other.numbers) continue; // same values → cannot be a data conflict
         let shared = 0;
         for (const w of fact.keywords) if (other.keywords.has(w)) shared++;
         const ratio = shared / Math.min(fact.keywords.size, other.keywords.size);
         if (shared >= 2 && ratio >= 0.3) {
-          pairs.push({ fact, doc, other, priority: ratio + scopeBoost });
+          add(ratio + scopeBoost);
           continue;
         }
         // Fallback for vocabulary the concept list doesn't know: same name or subject, same kind of
@@ -152,14 +185,12 @@ function candidatePairs(db: Db, draft: Draft, facts: Fact[]) {
         const sharedConcept = [...fact.keywords].some((k) => k.startsWith("c:") && !/^c:(m\d\d|day|week|month|year|hour|maximum)$/.test(k) && other.keywords.has(k));
         const sameValueType = [...fact.valueTypes].some((t) => other.valueTypes.has(t));
         const yearsCompatible = !fact.years.size || !other.years.size || [...fact.years].some((y) => other.years.has(y));
-        if ((sharedAnchor || sharedConcept) && sameValueType && yearsCompatible) {
-          pairs.push({ fact, doc, other, priority: 0.25 + scopeBoost });
-        }
+        if ((sharedAnchor || sharedConcept) && sameValueType && yearsCompatible) add(0.25 + scopeBoost);
       }
-    }
-  }
+    });
+  });
   // Best pairs first, but don't let one line hog the whole budget.
-  pairs.sort((a, b) => b.priority - a.priority);
+  pairs.sort((a, b) => b.priority - a.priority || a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2] - b.order[2]);
   const perLine = new Map<number, number>();
   const chosen: Pair[] = [];
   for (const p of pairs) {

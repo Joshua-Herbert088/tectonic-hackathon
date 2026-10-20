@@ -37,3 +37,25 @@ export function limitWrites(personId: string, sessionId: string, chars = 0, now 
   rateLimit(`chars-session:${sessionId}`, 5_000_000, HOUR, now, chars);
   rateLimit("chars:*", 20_000_000, HOUR, now, chars);
 }
+
+/** Saves running at once: per person, and in all. More are turned away instead of queueing up. */
+export const MAX_SAVES_PER_PERSON = 2;
+export const MAX_SAVES = 8;
+const running = new Map<string, number>();
+let runningTotal = 0;
+
+/** Runs a save, or answers 429 when that person or the server already has too many running. */
+export async function withSaveSlot<T>(personId: string, save: () => Promise<T>): Promise<T> {
+  const mine = running.get(personId) ?? 0;
+  if (mine >= MAX_SAVES_PER_PERSON || runningTotal >= MAX_SAVES) throw new HttpError(429, "Another save is still running. Try again in a moment.");
+  running.set(personId, mine + 1);
+  runningTotal++;
+  try {
+    return await save();
+  } finally {
+    const left = (running.get(personId) ?? 1) - 1;
+    if (left) running.set(personId, left);
+    else running.delete(personId);
+    runningTotal--;
+  }
+}

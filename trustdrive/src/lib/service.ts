@@ -9,7 +9,7 @@ import { answersForDoc, captureAnswers, faqAnswers, faqSuggestions, sharedOnly, 
 import type { z } from "zod";
 import { notifyEdit, notifyOverrides } from "./notify";
 import type { documentPatch } from "./schemas";
-import { dismissFaq, storedChars, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
+import { charsWrittenBy, dismissFaq, storedChars, documentSources, insertScore, recordOverrides, updateDocument, latestScore, latestScoresForViewer, loadActivity, loadAnswers, loadConversations, loadHistory, loadWorld, scoreHistory } from "./db";
 import { menteeView } from "./mentoring";
 import { buildLedger, profileOf, suggestions, whoKnows } from "./expertise";
 import { handoverFor } from "./handover";
@@ -421,27 +421,38 @@ export function checkTags(db: Db, tags: string[] | undefined, existing: string[]
   if (unknown !== undefined) throw new HttpError(400, `“${unknown}” isn't a tag in the taxonomy. Add it on the Company & tags page first.`);
 }
 
-/** Limits on what's stored, so the drive can't be filled up: documents in all, per owner, and characters of text. */
+/** Limits on what's stored, so the drive can't be filled up or made slow to load. */
 export const MAX_DOCUMENTS = 5_000;
 export const MAX_DOCUMENTS_PER_OWNER = 500;
-/** Documents (trash included) and their edit history together. */
+/** Text of all documents (trash included): what most requests load. */
+export const MAX_DOCUMENT_CHARS = 50_000_000;
+/** Documents and their edit history together. */
 export const MAX_STORED_CHARS = 200_000_000;
+/** Per person, counted in the database: text saved in the last 24 hours, and text in documents they own. */
+export const MAX_CHARS_PER_PERSON_PER_DAY = 10_000_000;
+export const MAX_OWNED_CHARS = 20_000_000;
 
 // Summing all stored text takes a scan, so it's done at most every 30 s; saves in between are added on.
-let stored: { at: number; chars: number } | null = null;
+let stored: { at: number; documents: number; history: number } | null = null;
 
-/** 507 or 409 when adding `chars` characters (and, with `document`, a new document) would go past a limit. */
-export async function checkStorage(db: Db, viewer: Person, adding: { document?: boolean; chars: number }, now = Date.now()) {
+/**
+ * 507 or 409 when saving `chars` characters of text (a new document with `document`; one `owned` by the
+ * viewer) would go past a limit. Saved text is stored twice: in the document and as a history version.
+ */
+export async function checkStorage(db: Db, viewer: Person, adding: { document?: boolean; owned?: boolean; chars: number }, now = Date.now()) {
   if (adding.document) {
     if (db.docs.length >= MAX_DOCUMENTS) throw new HttpError(507, "The drive is full: no more documents can be added until some are removed.");
     if (db.docs.filter((d) => d.ownerId === viewer.id).length >= MAX_DOCUMENTS_PER_OWNER) throw new HttpError(409, `You own ${MAX_DOCUMENTS_PER_OWNER} documents, the most one person can. Hand some over or remove them first.`);
   }
-  if (!stored || now - stored.at > 30_000) {
-    const s = await storedChars();
-    stored = { at: now, chars: s.documents + s.history };
+  if (!stored || now - stored.at > 30_000) stored = { at: now, ...(await storedChars()) };
+  if (stored.documents + adding.chars > MAX_DOCUMENT_CHARS || stored.documents + stored.history + 2 * adding.chars > MAX_STORED_CHARS) {
+    throw new HttpError(507, "The drive is out of space for new text. Remove documents you no longer need first.");
   }
-  if (stored.chars + adding.chars > MAX_STORED_CHARS) throw new HttpError(507, "The drive is out of space for new text. Remove documents you no longer need first.");
-  stored.chars += adding.chars;
+  const mine = await charsWrittenBy(viewer.id, new Date(now - 86_400_000).toISOString());
+  if (adding.owned && mine.owned + adding.chars > MAX_OWNED_CHARS) throw new HttpError(409, "Your documents hold as much text as one person's can. Hand some over or remove what you no longer need.");
+  if (mine.written + adding.chars > MAX_CHARS_PER_PERSON_PER_DAY) throw new HttpError(429, "You've saved a lot of text in the last 24 hours. Try again tomorrow, or ask someone to help.");
+  stored.documents += adding.chars;
+  stored.history += adding.chars;
 }
 
 /** Owner or collaborator: the people who may change a document's status, tags, scope and confidentiality. */
@@ -526,8 +537,7 @@ export async function editDocument(viewer: Person, id: string, body: z.infer<typ
     gate = g;
   }
 
-  // The new text is stored twice: in the document and as a version in its history.
-  if (contentChanged) await checkStorage(world, viewer, { chars: 2 * (title.length + content.length) });
+  if (contentChanged) await checkStorage(world, viewer, { owned: doc.ownerId === viewer.id, chars: title.length + content.length });
   if (contentChanged) await notifyEdit(world, doc, title, content, viewer.id);
   await updateDocument(id, viewer.id, patch);
   if (gate?.ok) {

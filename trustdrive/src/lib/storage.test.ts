@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { closeDb, loadDirectory, loadHistory, loadWorld, MAX_VERSIONS, migrateAndSeed, storedChars, updateDocument } from "./db";
-import { checkStorage, MAX_DOCUMENTS, MAX_DOCUMENTS_PER_OWNER, MAX_STORED_CHARS } from "./service";
+import { charsWrittenBy, closeDb, loadDirectory, loadHistory, loadWorld, MAX_VERSIONS, migrateAndSeed, storedChars, updateDocument } from "./db";
+import { checkStorage, MAX_CHARS_PER_PERSON_PER_DAY, MAX_DOCUMENT_CHARS, MAX_DOCUMENTS, MAX_DOCUMENTS_PER_OWNER, MAX_OWNED_CHARS } from "./service";
 import type { Db, Doc } from "./types";
 
 // A throwaway in-memory Postgres (PGLITE_DIR=memory:// in vitest.config.ts), migrated and seeded.
@@ -50,11 +50,22 @@ describe("storage limits", () => {
     await expect(checkStorage(world, jonas(), { document: true, chars: 1 })).resolves.toBeUndefined();
   });
 
-  test("no text past the stored-characters limit", async () => {
+  test("no text past the drive's limits", async () => {
     const { documents, history } = await storedChars();
     expect(documents).toBeGreaterThan(0);
     expect(history).toBeGreaterThan(0);
-    await expect(checkStorage(world, jonas(), { chars: MAX_STORED_CHARS })).rejects.toMatchObject({ status: 507 });
+    await expect(checkStorage(world, jonas(), { chars: MAX_DOCUMENT_CHARS - documents + 1 })).rejects.toMatchObject({ status: 507 });
+  });
+
+  test("per person, counted in the database: text saved in 24 hours and text in documents they own", async () => {
+    const before = await charsWrittenBy("an", new Date(Date.now() - 86_400_000).toISOString());
+    await updateDocument("dmfa-checklist", "an", { content: "# DmfA\n\n" + "x".repeat(1000) });
+    const after = await charsWrittenBy("an", new Date(Date.now() - 86_400_000).toISOString());
+    expect(after.written).toBeGreaterThanOrEqual(before.written + 1000);
+    expect(after.owned).toBeGreaterThan(0);
+    const an = world.people.find((p) => p.id === "an")!;
+    await expect(checkStorage(world, an, { chars: MAX_CHARS_PER_PERSON_PER_DAY - after.written + 1 })).rejects.toMatchObject({ status: 429 });
+    await expect(checkStorage(world, an, { owned: true, chars: MAX_OWNED_CHARS - after.owned + 1 })).rejects.toMatchObject({ status: 409 });
   });
 });
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -276,6 +276,19 @@ export async function storedChars() {
     orm.select({ n: sql<number>`coalesce(sum(length(${schema.edits.content})), 0)::int` }).from(schema.edits),
   ]);
   return { documents: Number(docs.n), history: Number(history.n) };
+}
+
+/**
+ * For the per-person quotas, counted in the database so they hold across restarts and server instances:
+ * characters `personId` saved (history versions) since `since`, and characters in the documents they own.
+ */
+export async function charsWrittenBy(personId: string, since: string) {
+  const orm = await db();
+  const [[written], [owned]] = await Promise.all([
+    orm.select({ n: sql<number>`coalesce(sum(length(${schema.edits.content})), 0)::int` }).from(schema.edits).where(and(eq(schema.edits.personId, personId), gte(schema.edits.at, since))),
+    orm.select({ n: sql<number>`coalesce(sum(length(${schema.documents.content})), 0)::int` }).from(schema.documents).where(eq(schema.documents.ownerId, personId)),
+  ]);
+  return { written: Number(written.n), owned: Number(owned.n) };
 }
 
 function toTermRow(t: Term) {
