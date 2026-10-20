@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Db, Doc, Person, Signal, TrustScore } from "./types";
 import { coversCountry, formatLocations, isGlobal } from "./appliesTo";
 import { config } from "./config";
+import { LEGAL_TEAM_ID } from "./legal";
 import { stripLinks } from "./lexicon";
 import { daysSince, timeAgo } from "./time";
 
@@ -18,12 +19,36 @@ export const TRUST_LEVELS = [
 const MAX_CONTENT_CHARS = 6000;
 const MAX_RELATED_EXCERPT = 700;
 
-/** Related documents with their relatedness score (≥ 3), strongest first. */
+/**
+ * Verifications of the document as it reads now. One given before the last edit confirmed other text,
+ * so it doesn't vouch for this version.
+ */
+export function currentVerifications(doc: Pick<Doc, "verifications" | "updatedAt">) {
+  return doc.verifications.filter((v) => v.at >= doc.updatedAt);
+}
+
+const latest = <T extends { at: string }>(xs: T[]) => [...xs].sort((a, b) => b.at.localeCompare(a.at))[0];
+
+/**
+ * Who may confirm a document is correct: the people accountable for it (owner, collaborators, the team
+ * that maintains it) and Legal & Compliance. Anyone else's word would raise its trust for everybody.
+ */
+export function mayVerify(doc: Pick<Doc, "ownerId" | "collaboratorIds" | "teamId">, person: Person) {
+  return person.active && (doc.ownerId === person.id || doc.collaboratorIds.includes(person.id) || person.teamId === doc.teamId || person.teamId === LEGAL_TEAM_ID);
+}
+
+/** Whether two documents can be about the same rules: a country in common (or Global), and no other client's file. */
+function sameScope(doc: Doc, d: Doc) {
+  const countries = isGlobal(doc.locations) || isGlobal(d.locations) || d.locations.some((l) => doc.locations.includes(l));
+  return countries && (!d.clientId || d.clientId === doc.clientId);
+}
+
+/** Related documents with their relatedness score (≥ 3), strongest first. Only ones in the same scope (sameScope). */
 export function relatedScored(db: Db, doc: Doc, limit = 4): { d: Doc; s: number }[] {
   const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3));
   const titleWords = words(doc.title);
   return db.docs
-    .filter((d) => d.id !== doc.id)
+    .filter((d) => d.id !== doc.id && (sameScope(doc, d) || d.supersededById === doc.id || doc.supersededById === d.id))
     .map((d) => {
       let s = d.tags.filter((t) => doc.tags.includes(t)).length * 2;
       if (d.teamId === doc.teamId) s += 1;
@@ -66,7 +91,11 @@ function viewerRelation(doc: Doc, viewerId: string) {
 
 /** Everything Jev sees. Kept as a plain object so we can show it in the UI and hash it for caching. */
 export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()) {
-  const lastVerification = [...doc.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
+  const verified = currentVerifications(doc);
+  const lastVerification = latest(verified);
+  const earlierVerification = lastVerification ? undefined : latest(doc.verifications);
+  const content = stripLinks(doc.content);
+  const unseen = content.slice(MAX_CONTENT_CHARS);
   const views30 = doc.views.filter((v) => daysSince(v.at, now) <= 30);
   const team = db.teams.find((t) => t.id === doc.teamId)?.name;
   const superseding = doc.supersededById ? db.docs.find((d) => d.id === doc.supersededById) : undefined;
@@ -97,8 +126,12 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
       readerCount: doc.readerIds.length,
       lastVerifiedCorrect: lastVerification
         ? { daysAgo: daysSince(lastVerification.at, now), by: personSummary(db, lastVerification.personId, now) }
-        : "NEVER VERIFIED",
-      timesVerified: doc.verifications.length,
+        : earlierVerification
+          ? "NOT SINCE THE LAST EDIT"
+          : "NEVER VERIFIED",
+      // Verified before the content last changed: that confirmed different text.
+      earlierVersionVerified: earlierVerification ? { daysAgo: daysSince(earlierVerification.at, now), by: personSummary(db, earlierVerification.personId, now) } : undefined,
+      timesVerified: verified.length,
       viewsLast30Days: views30.length,
       distinctViewersLast30Days: new Set(views30.map((v) => v.personId)).size,
       supersededBy: superseding ? { title: superseding.title, lastEditedDaysAgo: daysSince(superseding.updatedAt, now) } : undefined,
@@ -121,10 +154,19 @@ export function buildJevState(db: Db, doc: Doc, viewer: Person, now = Date.now()
             daysAgo: daysSince(o.at, now),
           }))
         : undefined,
-      content: stripLinks(doc.content).slice(0, MAX_CONTENT_CHARS),
+      content: content.slice(0, MAX_CONTENT_CHARS),
+      // Content past the limit isn't sent, but it mustn't go unnoticed: Jev is told it's there and which
+      // years it mentions, and the fingerprint makes an edit there change the hash, so it's scored again.
+      contentNotShown: unseen
+        ? {
+            characters: unseen.length,
+            yearsMentioned: [...new Set(unseen.match(/\b20\d\d\b/g) ?? [])].sort(),
+            fingerprint: crypto.createHash("sha1").update(unseen).digest("hex").slice(0, 16),
+          }
+        : undefined,
     },
     relatedDocuments: relatedDocs(db, doc).map((r) => {
-      const v = [...r.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
+      const v = latest(currentVerifications(r));
       const owner = db.people.find((p) => p.id === r.ownerId);
       return {
         title: r.title,
@@ -219,7 +261,7 @@ export async function scoreWithJev(state: JevState): Promise<Omit<TrustScore, "i
       trust: {
         type: "score",
         instructions:
-          "How much can the reader trust that this document is accurate and up to date for their situation? Consider who owns and maintains it and whether they are still at the company, when it was last edited and verified correct, its status, whether it applies to the reader's country and team, whether its content looks current as of today, whether related documents are newer or contradict it, and whether anyone saved it despite a known conflict with another document.",
+          "How much can the reader trust that this document is accurate and up to date for their situation? Consider who owns and maintains it and whether they are still at the company, when it was last edited and verified correct, its status, whether it applies to the reader's country and team, whether its content looks current as of today, whether related documents are newer or contradict it, and whether anyone saved it despite a known conflict with another document. Content that wasn't shown (contentNotShown) can't be confirmed as current.",
         criteria: TRUST_LEVELS,
       },
     },
@@ -243,7 +285,7 @@ export async function scoreWithJev(state: JevState): Promise<Omit<TrustScore, "i
 export function fallbackScore(db: Db, doc: Doc, viewer: Person, reason: string, now = Date.now(), opts: { confidential?: boolean } = {}): Omit<TrustScore, "inputHash"> {
   const started = Date.now();
   const owner = db.people.find((p) => p.id === doc.ownerId);
-  const lastVerified = Math.min(...doc.verifications.map((v) => daysSince(v.at, now)), Infinity);
+  const lastVerified = Math.min(...currentVerifications(doc).map((v) => daysSince(v.at, now)), Infinity);
   const freshest = Math.min(lastVerified, daysSince(doc.updatedAt, now));
   const otherCountry = !coversCountry(doc.locations, viewer.location);
   const year = new Date(now).getFullYear();
@@ -296,8 +338,13 @@ export function buildSignals(db: Db, doc: Doc, viewer: Person, now = Date.now())
   else out.push({ tone: "bad", text: `Not edited in ${timeAgo(doc.updatedAt, now).replace(" ago", "")}` });
 
   // Verification
-  const last = [...doc.verifications].sort((a, b) => b.at.localeCompare(a.at))[0];
-  if (!last) out.push({ tone: "bad", text: "Never verified as correct" });
+  const last = latest(currentVerifications(doc));
+  const earlier = latest(doc.verifications);
+  if (!last && earlier) {
+    const v = person(earlier.personId);
+    const who = v ? (v.id === doc.ownerId ? `owner ${v.name}` : v.name) : "someone";
+    out.push({ tone: "warn", text: `Verified correct by ${who} ${timeAgo(earlier.at, now)}, but edited since – this version isn't verified` });
+  } else if (!last) out.push({ tone: "bad", text: "Never verified as correct" });
   else {
     const v = person(last.personId);
     const d = daysSince(last.at, now);

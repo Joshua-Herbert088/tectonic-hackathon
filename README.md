@@ -32,6 +32,8 @@ The document page lists plain facts such as "Edited by owner Lotte Peeters 2 hou
 
 ### Verify button
 **"I confirm this document is correct"** records a verification by the current user. That changes Jev's input, so the document is rescored straight away.
+- **Who:** the owner, collaborators, the team that maintains it, or Legal & Compliance. Anyone else is asked to get the owner to check it, since their word would raise the document's trust for everybody.
+- **Per version:** a verification vouches for the text as it was then. After the content is edited it no longer counts as verified (*verified …, but edited since – this version isn't verified*), and confirming the same version again adds nothing.
 
 ### Legal & Compliance badge
 Documents that come from Legal & Compliance (the team that maintains them), or that someone from Legal confirmed, carry a badge saying **who in Legal validated it and when** (`src/lib/legal.ts`, `src/components/LegalBadge.tsx`):
